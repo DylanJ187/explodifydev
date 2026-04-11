@@ -114,12 +114,12 @@ function StylingLoader() {
   const stageIdx = STYLING_STAGES.findIndex(s => s.key === stage)
   const currentStage = STYLING_STAGES[stageIdx]
 
-  // Logarithmic progress curve: jumps to ~40% quickly, then crawls.
-  // Feels fast early on even though the total wait is ~3 min.
-  const t = Math.min(elapsedSecs / TOTAL_STYLING_SECS, 1)
+  // Logarithmic progress curve: jumps to ~40% quickly, then crawls toward 95%.
+  // t is NOT capped at 1 so over-time renders keep crawling rather than freezing.
+  const t = elapsedSecs / TOTAL_STYLING_SECS
   const progressPct = Math.min(95, t < 0.15
     ? t * 300          // 0-45% in first 27s
-    : 45 + (1 - Math.exp(-4 * (t - 0.15))) * 50  // 45-95% logarithmic
+    : 45 + (1 - Math.exp(-4 * (t - 0.15))) * 50  // 45→95% asymptotic
   )
 
   const isOverTime = elapsedSecs > TOTAL_STYLING_SECS

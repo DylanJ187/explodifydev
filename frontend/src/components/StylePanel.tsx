@@ -1,6 +1,9 @@
 // frontend/src/components/StylePanel.tsx
 import type { StyleOptions } from '../App'
 
+const MAX_MATERIAL_CHARS = 400
+const MAX_STYLE_CHARS = 400
+
 interface Props {
   options: StyleOptions
   onOptionsChange: (opts: StyleOptions) => void
@@ -65,11 +68,13 @@ export function StylePanel({
         <textarea
           className="style-prompt"
           rows={2}
+          maxLength={MAX_MATERIAL_CHARS}
           placeholder="e.g. brushed aluminium body, matte black cap, frosted glass lens..."
           value={options.materialPrompt}
           onChange={(e) => onOptionsChange({ ...options, materialPrompt: e.target.value })}
           disabled={disabled}
         />
+        <span className="char-counter">{options.materialPrompt.length}/{MAX_MATERIAL_CHARS}</span>
       </div>
 
       {/* Style prompt */}
@@ -78,11 +83,13 @@ export function StylePanel({
         <textarea
           className="style-prompt"
           rows={2}
+          maxLength={MAX_STYLE_CHARS}
           placeholder="Additional style notes... (mood, lighting, colour)"
           value={options.prompt}
           onChange={(e) => onOptionsChange({ ...options, prompt: e.target.value })}
           disabled={disabled}
         />
+        <span className="char-counter">{options.prompt.length}/{MAX_STYLE_CHARS}</span>
       </div>
 
       {/* Explosion level slider */}

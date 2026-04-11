@@ -86,7 +86,7 @@ async def _demo_pipeline(job_id: str, has_styled: bool) -> None:
     approval_event = jobs.mark_awaiting_approval(job_id)
     await approval_event.wait()
     jobs.update_phase(job_id, 4, "done")
-    jobs.mark_done(job_id, None)
+    jobs.mark_done(job_id, ai_styled=has_styled)
 
 
 @app.get("/preview/sample")
@@ -374,9 +374,8 @@ async def _run_pipeline(
             master_angle,
             output_dir / "raw",
             scalar,
-            style_prompt,
-            orbit_range_deg,
-            rotation_offset_deg,
+            orbit_range_deg=orbit_range_deg,
+            rotation_offset_deg=rotation_offset_deg,
         )
 
         # 2b — 72 video frames at 1920×1080 for ffmpeg assembly

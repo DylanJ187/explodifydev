@@ -423,6 +423,14 @@ textarea { font-family: inherit; }
   gap: 4px;
 }
 
+.char-counter {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-2);
+  text-align: right;
+  opacity: 0.6;
+}
+
 .prompt-section-label {
   font-family: var(--font-mono);
   font-size: 9px;

@@ -35,6 +35,18 @@ const DEFAULT_STYLE: StyleOptions = {
   prompt: '',
 }
 
+// Pre-populated style for demo mode — kept in sync with scripts/rerender_demo.py.
+const DEMO_STYLE: StyleOptions = {
+  studioLighting: true,
+  darkBackdrop: false,
+  whiteBackdrop: false,
+  warmTone: false,
+  coldTone: false,
+  groundShadow: true,
+  materialPrompt: 'brushed aluminium body with machined surfaces, matte black plastic accents, polished metal fasteners',
+  prompt: '',
+}
+
 export default function App() {
   const [state, setState] = useState<AppState>('idle')
   const [jobId, setJobId] = useState<string | null>(null)
@@ -137,6 +149,7 @@ export default function App() {
     setErrorMsg(null)
     try {
       setState('uploading')
+      setStyleOptions(DEMO_STYLE)
       const id = await createDemoJob()
       setJobId(id)
       setState('awaiting_approval')

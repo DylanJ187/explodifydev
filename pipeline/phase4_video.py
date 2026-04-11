@@ -21,13 +21,13 @@ from pathlib import Path
 import fal_client
 import httpx
 
-FAL_KLING_EDIT = "fal-ai/kling-video/o1/standard/video-to-video/edit"
+FAL_KLING_EDIT = "fal-ai/kling-video/o1/video-to-video/edit"
 
 
 class KlingVideoEditor:
     """Phase 4: Upload assembled video → Kling o1 edit → download styled result."""
 
-    def __init__(self, fal_key: str | None = None) -> None:
+    def __init__(self, fal_key: str | None = None, quality: bool = False) -> None:
         key = fal_key or os.environ.get("FAL_KEY", "")
         if not key:
             raise ValueError(
@@ -35,6 +35,7 @@ class KlingVideoEditor:
                 "Set it in your .env file."
             )
         os.environ["FAL_KEY"] = key
+        self._endpoint = FAL_KLING_EDIT
 
     async def edit(
         self,
@@ -62,16 +63,19 @@ class KlingVideoEditor:
         )
         print(f"[Phase 4] Uploaded -> {video_url}")
 
-        print("[Phase 4] Submitting Kling o1 edit...")
+        print(f"[Phase 4] Submitting Kling o1 edit...")
         print(f"[Phase 4] Prompt: {prompt[:200]}...")
 
-        # Blocking fal_client.subscribe call, run off the event loop
+        # Blocking fal_client.subscribe call, run off the event loop.
+        # duration="3" matches the 72-frame 24fps base video exactly.
+        # Omitting it lets Kling default to 5s and stretch the motion.
         result = await asyncio.to_thread(
             fal_client.subscribe,
-            FAL_KLING_EDIT,
+            self._endpoint,
             arguments={
                 "prompt": prompt,
                 "video_url": video_url,
+                "duration": "3",
             },
         )
 
