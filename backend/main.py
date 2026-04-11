@@ -107,8 +107,10 @@ async def preview_sample():
     try:
         from pipeline.format_loader import load_assembly
         from pipeline.orientation_preview import render_orientation_previews
+        from pipeline.phase1_geometry import GeometryAnalyzer
 
         named_meshes = load_assembly(str(PREVIEW_DIR / f"{preview_id}.obj"))
+        named_meshes = GeometryAnalyzer().reorient(named_meshes)
         images = render_orientation_previews(named_meshes)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
@@ -137,11 +139,13 @@ async def preview_orientations(file: UploadFile = File(...)):
     try:
         from pipeline.format_loader import load_assembly
         from pipeline.orientation_preview import render_orientation_previews
+        from pipeline.phase1_geometry import GeometryAnalyzer
 
         # Run synchronously on the main thread — pyrender's Cocoa/pyglet backend
         # requires the OS main thread on macOS.  Blocking the event loop here is
         # acceptable since this is a short-lived preview render (< 15 s).
         named_meshes = load_assembly(str(preview_path))
+        named_meshes = GeometryAnalyzer().reorient(named_meshes)
         images = render_orientation_previews(named_meshes)
     except Exception as exc:
         preview_path.unlink(missing_ok=True)
@@ -352,6 +356,7 @@ async def _run_pipeline(
         from pipeline.phase1_geometry import GeometryAnalyzer
         analyzer = GeometryAnalyzer()
         meshes = await asyncio.to_thread(analyzer.load, str(cad_path))
+        meshes = analyzer.reorient(meshes)
         vectors = await asyncio.to_thread(analyzer.explosion_vectors, meshes, scalar)
         jobs.update_phase(job_id, 1, "done")
 
