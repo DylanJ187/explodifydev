@@ -60,6 +60,7 @@ class PipelineMetadata:
     explosion_scalar: float         # E multiplier applied to explosion vectors
     component_count: int            # number of unique mesh IDs detected
     camera_angles_deg: list[float]  # [0.0, 15.0, 30.0]
+    style_prompt: str = ""          # user-supplied aesthetic; passed through to Phase 3 + 4
 
 
 @dataclass
@@ -637,6 +638,7 @@ class SnapshotRenderer:
         master_angle: str,
         output_dir: Path,
         scalar: float,
+        style_prompt: str = "",
     ) -> FrameSet:
         """Render 3 PNG snapshots and return a FrameSet.
 
@@ -646,6 +648,7 @@ class SnapshotRenderer:
             master_angle: Optimal direction name from GeometryAnalyzer.master_angle().
             output_dir: Directory to write frame_a.png, frame_b.png, frame_c.png.
             scalar: Explosion scalar (stored in metadata).
+            style_prompt: User-supplied aesthetic prompt; stored in metadata, used by Phase 3+4.
 
         Returns:
             FrameSet with paths to the 3 PNGs and PipelineMetadata.
@@ -670,6 +673,7 @@ class SnapshotRenderer:
             explosion_scalar=scalar,
             component_count=len(meshes),
             camera_angles_deg=CAMERA_ANGLES_DEG,
+            style_prompt=style_prompt,
         )
         return FrameSet(
             frame_a=frame_paths[0],
@@ -787,7 +791,11 @@ def test_phase1_to_phase2_full_pipeline(two_box_glb, tmp_path):
 
     # Phase 2
     renderer = SnapshotRenderer()
-    frame_set = renderer.render(meshes, vectors, master, output_dir=tmp_path, scalar=1.5)
+    frame_set = renderer.render(
+        meshes, vectors, master,
+        output_dir=tmp_path, scalar=1.5,
+        style_prompt="Brushed steel product on dark marble, dramatic rim lighting",
+    )
 
     # Validate output contract (what Phase 3 will consume)
     assert isinstance(frame_set, FrameSet)
@@ -798,9 +806,11 @@ def test_phase1_to_phase2_full_pipeline(two_box_glb, tmp_path):
     }
     assert frame_set.metadata.component_count >= 2
     assert frame_set.metadata.camera_angles_deg == [0.0, 15.0, 30.0]
+    assert frame_set.metadata.style_prompt == "Brushed steel product on dark marble, dramatic rim lighting"
 
     print(f"\nMaster angle: {frame_set.metadata.master_angle}")
     print(f"Components: {frame_set.metadata.component_count}")
+    print(f"Style prompt: {frame_set.metadata.style_prompt}")
     print(f"Frames: {frame_set.frame_a}, {frame_set.frame_b}, {frame_set.frame_c}")
 ```
 
@@ -859,6 +869,7 @@ def main():
     parser.add_argument("--explode", type=float, default=1.5, help="Explosion scalar multiplier")
     parser.add_argument("--output", default="output/exploded_view.mp4", help="Output video path")
     parser.add_argument("--frames-dir", default="output/frames", help="Directory for PNG frames")
+    parser.add_argument("--style-prompt", default="", help="Aesthetic style prompt for AI rendering")
     args = parser.parse_args()
 
     from pipeline.phase1_geometry import GeometryAnalyzer
@@ -880,8 +891,14 @@ def main():
 
     print("[Phase 2] Rendering keyframes ...")
     renderer = SnapshotRenderer()
-    frame_set = renderer.render(meshes, vectors, master, output_dir=frames_dir, scalar=args.explode)
+    frame_set = renderer.render(
+        meshes, vectors, master,
+        output_dir=frames_dir, scalar=args.explode,
+        style_prompt=args.style_prompt,
+    )
     print(f"[Phase 2] Frames: {frame_set.frame_a}, {frame_set.frame_b}, {frame_set.frame_c}")
+    if args.style_prompt:
+        print(f"[Phase 2] Style prompt carried: {args.style_prompt}")
 
     print(f"[Phase 3+4] Stylization + video: not yet implemented (Kirill's side)")
     print(f"[Done] Frame set ready at: {frames_dir}")

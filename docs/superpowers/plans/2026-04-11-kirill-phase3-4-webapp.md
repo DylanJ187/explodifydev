@@ -40,6 +40,7 @@ You can start Task 1 (env setup) and Task 5 (FastAPI skeleton) independently whi
 | `frontend/src/App.tsx` | Create | Root component, routing |
 | `frontend/src/api/client.ts` | Create | fetch wrapper for backend |
 | `frontend/src/components/UploadZone.tsx` | Create | Drag-and-drop file upload |
+| `frontend/src/components/PromptInput.tsx` | Create | Style prompt textarea with examples |
 | `frontend/src/components/PipelineProgress.tsx` | Create | Phase progress tracker |
 | `frontend/src/components/VideoPreview.tsx` | Create | MP4 player + download |
 | `tests/pipeline/test_phase3_stylize.py` | Create | Gemini stylization tests |
@@ -140,30 +141,29 @@ def mock_frame_set(tmp_path):
     )
 
 
-def test_stylize_returns_frame_set_with_three_pngs(mock_frame_set, tmp_path):
-    """Stylize should return a FrameSet with 3 existing PNG files."""
-    stylized_dir = tmp_path / "stylized"
-
-    # Mock the Gemini API to return a white 256x256 PNG
+@pytest.fixture
+def fake_gemini_response():
     import io
     from PIL import Image
     buf = io.BytesIO()
     Image.new("RGB", (256, 256), color=(240, 240, 240)).save(buf, format="PNG")
-    fake_png_bytes = buf.getvalue()
+    part = MagicMock()
+    part.inline_data.data = buf.getvalue()
+    part.inline_data.mime_type = "image/png"
+    response = MagicMock()
+    response.candidates[0].content.parts = [part]
+    return response
 
-    fake_part = MagicMock()
-    fake_part.inline_data.data = fake_png_bytes
-    fake_part.inline_data.mime_type = "image/png"
-    fake_response = MagicMock()
-    fake_response.candidates[0].content.parts = [fake_part]
 
+def test_stylize_returns_frame_set_with_three_pngs(mock_frame_set, tmp_path, fake_gemini_response):
+    """Stylize should return a FrameSet with 3 existing PNG files."""
     with patch("pipeline.phase3_stylize.genai") as mock_genai:
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
-        mock_client.models.generate_content.return_value = fake_response
+        mock_client.models.generate_content.return_value = fake_gemini_response
 
         stylizer = GeminiStylizer(api_key="fake_key")
-        result = stylizer.stylize(mock_frame_set, output_dir=stylized_dir)
+        result = stylizer.stylize(mock_frame_set, output_dir=tmp_path / "stylized")
 
     assert isinstance(result, FrameSet)
     assert result.frame_a.exists()
@@ -171,23 +171,49 @@ def test_stylize_returns_frame_set_with_three_pngs(mock_frame_set, tmp_path):
     assert result.frame_c.exists()
 
 
-def test_stylize_preserves_metadata(mock_frame_set, tmp_path):
-    import io
-    from PIL import Image
-    buf = io.BytesIO()
-    Image.new("RGB", (256, 256)).save(buf, format="PNG")
-    fake_png_bytes = buf.getvalue()
-
-    fake_part = MagicMock()
-    fake_part.inline_data.data = fake_png_bytes
-    fake_part.inline_data.mime_type = "image/png"
-    fake_response = MagicMock()
-    fake_response.candidates[0].content.parts = [fake_part]
+def test_stylize_uses_custom_style_prompt(mock_frame_set, tmp_path, fake_gemini_response):
+    """The user's style prompt must appear in the Gemini API call."""
+    mock_frame_set.metadata.style_prompt = "Neon cyberpunk aesthetic, dark background, glowing edges"
 
     with patch("pipeline.phase3_stylize.genai") as mock_genai:
         mock_client = MagicMock()
         mock_genai.Client.return_value = mock_client
-        mock_client.models.generate_content.return_value = fake_response
+        mock_client.models.generate_content.return_value = fake_gemini_response
+
+        stylizer = GeminiStylizer(api_key="fake_key")
+        stylizer.stylize(mock_frame_set, output_dir=tmp_path / "custom")
+
+    # Verify the custom prompt was passed to Gemini (appears in call args)
+    call_args = mock_client.models.generate_content.call_args_list[0]
+    contents = call_args.kwargs["contents"] if call_args.kwargs else call_args[1]["contents"]
+    prompt_text = next(p.text for p in contents if hasattr(p, "text"))
+    assert "Neon cyberpunk" in prompt_text
+    assert "Preserve the exact structure" in prompt_text  # structural constraint always present
+
+
+def test_stylize_uses_default_prompt_when_empty(mock_frame_set, tmp_path, fake_gemini_response):
+    """Empty style_prompt falls back to DEFAULT_STYLE_PROMPT."""
+    mock_frame_set.metadata.style_prompt = ""
+
+    with patch("pipeline.phase3_stylize.genai") as mock_genai:
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.generate_content.return_value = fake_gemini_response
+
+        stylizer = GeminiStylizer(api_key="fake_key")
+        stylizer.stylize(mock_frame_set, output_dir=tmp_path / "default")
+
+    call_args = mock_client.models.generate_content.call_args_list[0]
+    contents = call_args.kwargs["contents"] if call_args.kwargs else call_args[1]["contents"]
+    prompt_text = next(p.text for p in contents if hasattr(p, "text"))
+    assert "industrial design" in prompt_text  # from DEFAULT_STYLE_PROMPT
+
+
+def test_stylize_preserves_metadata(mock_frame_set, tmp_path, fake_gemini_response):
+    with patch("pipeline.phase3_stylize.genai") as mock_genai:
+        mock_client = MagicMock()
+        mock_genai.Client.return_value = mock_client
+        mock_client.models.generate_content.return_value = fake_gemini_response
 
         stylizer = GeminiStylizer(api_key="fake_key")
         result = stylizer.stylize(mock_frame_set, output_dir=tmp_path / "s2")
@@ -219,15 +245,24 @@ from google.genai import types
 
 from pipeline.models import FrameSet, PipelineMetadata
 
-STYLE_PROMPT = (
-    "Transform this 3D render into a high-end industrial design advertisement render. "
-    "Blender Cycles quality, dramatic studio lighting with soft shadows, "
-    "brushed aluminum and polycarbonate materials, pure white background, "
-    "photorealistic product photography style. Preserve the exact structure, "
-    "layout, and positions of all components. Do not add or remove parts."
+DEFAULT_STYLE_PROMPT = (
+    "High-end industrial design render, Blender Cycles quality, "
+    "dramatic studio lighting with soft shadows, brushed aluminum and polycarbonate materials, "
+    "pure white background, photorealistic product photography style."
+)
+
+STRUCTURAL_CONSTRAINT = (
+    "Preserve the exact structure, layout, and positions of all components. "
+    "Do not add, remove, or rearrange parts."
 )
 
 MODEL = "gemini-2.0-flash-preview-image-generation"
+
+
+def _build_gemini_prompt(style_prompt: str) -> str:
+    """Combine the user's aesthetic with the non-negotiable structural constraint."""
+    aesthetic = style_prompt.strip() if style_prompt.strip() else DEFAULT_STYLE_PROMPT
+    return f"Transform this 3D render. {STRUCTURAL_CONSTRAINT} {aesthetic}"
 
 
 class GeminiStylizer:
@@ -240,15 +275,20 @@ class GeminiStylizer:
     def stylize(self, frame_set: FrameSet, output_dir: Path) -> FrameSet:
         """Apply Gemini image-to-image stylization to all 3 frames.
 
+        The style prompt is read from frame_set.metadata.style_prompt.
+        If empty, DEFAULT_STYLE_PROMPT is used.
+
         Args:
-            frame_set: Raw FrameSet produced by Phase 2.
-            output_dir: Directory to write stylized_frame_a.png etc.
+            frame_set: Raw FrameSet produced by Phase 2 (carries style_prompt in metadata).
+            output_dir: Directory to write frame_a.png, frame_b.png, frame_c.png.
 
         Returns:
             New FrameSet pointing to stylized PNG files, with same metadata.
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        prompt = _build_gemini_prompt(frame_set.metadata.style_prompt)
 
         frame_map = [
             (frame_set.frame_a, "frame_a.png"),
@@ -258,7 +298,7 @@ class GeminiStylizer:
         output_paths = []
         for src_path, out_name in frame_map:
             out_path = output_dir / out_name
-            stylized = self._stylize_single(src_path)
+            stylized = self._stylize_single(src_path, prompt)
             stylized.save(str(out_path))
             output_paths.append(out_path)
 
@@ -269,8 +309,8 @@ class GeminiStylizer:
             metadata=frame_set.metadata,
         )
 
-    def _stylize_single(self, frame_path: Path) -> Image.Image:
-        """Call Gemini to stylize one PNG. Returns PIL Image."""
+    def _stylize_single(self, frame_path: Path, prompt: str) -> Image.Image:
+        """Call Gemini to stylize one PNG using the given prompt. Returns PIL Image."""
         with open(frame_path, "rb") as f:
             image_bytes = f.read()
 
@@ -278,7 +318,7 @@ class GeminiStylizer:
             model=MODEL,
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                types.Part.from_text(STYLE_PROMPT),
+                types.Part.from_text(prompt),
             ],
             config=types.GenerateContentConfig(
                 response_modalities=["IMAGE"],
@@ -413,10 +453,17 @@ from pipeline.models import FrameSet
 
 FAL_MODEL = "fal-ai/kling-video/v2/master/image-to-video"
 CLIP_DURATION = "5"   # seconds per clip — 2 clips = ~10s total
-CLIP_PROMPT = (
-    "Smooth product animation. Parts separate cleanly and gracefully. "
-    "Studio lighting. Clean white background. Product advertisement style."
+DEFAULT_VIDEO_PROMPT = (
+    "Smooth product advertisement animation. Parts separate cleanly and gracefully. "
+    "Studio lighting. Clean white background."
 )
+
+
+def _build_video_prompt(style_prompt: str) -> str:
+    """Combine user's aesthetic with the motion description."""
+    motion = "Smooth animation, parts separate cleanly and gracefully."
+    aesthetic = style_prompt.strip() if style_prompt.strip() else DEFAULT_VIDEO_PROMPT
+    return f"{motion} {aesthetic}"
 
 
 class FalVideoSynth:
@@ -444,10 +491,12 @@ class FalVideoSynth:
         frame_b_uri = self._to_data_uri(stylized_frames.frame_b)
         frame_c_uri = self._to_data_uri(stylized_frames.frame_c)
 
+        video_prompt = _build_video_prompt(stylized_frames.metadata.style_prompt)
+
         # Clip 1: assembled → mid-explode (frame A → frame B)
-        clip1_bytes = self._generate_clip(frame_a_uri, frame_b_uri)
+        clip1_bytes = self._generate_clip(frame_a_uri, frame_b_uri, video_prompt)
         # Clip 2: mid-explode → fully exploded (frame B → frame C)
-        clip2_bytes = self._generate_clip(frame_b_uri, frame_c_uri)
+        clip2_bytes = self._generate_clip(frame_b_uri, frame_c_uri, video_prompt)
 
         # Stitch clips by concatenating raw bytes (works for quick demo; use ffmpeg for production)
         stitched = self._stitch_clips(clip1_bytes, clip2_bytes, output_path)
@@ -459,12 +508,12 @@ class FalVideoSynth:
             data = base64.b64encode(f.read()).decode()
         return f"data:image/png;base64,{data}"
 
-    def _generate_clip(self, start_image_url: str, end_image_url: str) -> bytes:
+    def _generate_clip(self, start_image_url: str, end_image_url: str, prompt: str) -> bytes:
         """Call fal.ai Kling v2 to generate one video clip. Returns video bytes."""
         result = fal_client.subscribe(
             FAL_MODEL,
             arguments={
-                "prompt": CLIP_PROMPT,
+                "prompt": prompt,
                 "image_url": start_image_url,
                 "tail_image_url": end_image_url,
                 "duration": CLIP_DURATION,
@@ -696,7 +745,7 @@ def test_create_job_returns_job_id():
         resp = client.post(
             "/jobs",
             files={"file": ("assembly.glb", f, "application/octet-stream")},
-            data={"explode_scalar": "1.5"},
+            data={"explode_scalar": "1.5", "style_prompt": "Matte black industrial, dark studio"},
         )
     assert resp.status_code == 202
     body = resp.json()
@@ -712,7 +761,7 @@ def test_get_job_status():
         create_resp = client.post(
             "/jobs",
             files={"file": ("assembly.glb", f, "application/octet-stream")},
-            data={"explode_scalar": "1.5"},
+            data={"explode_scalar": "1.5", "style_prompt": "Matte black industrial, dark studio"},
         )
     job_id = create_resp.json()["job_id"]
 
@@ -777,8 +826,9 @@ def health():
 async def create_job(
     file: UploadFile = File(...),
     explode_scalar: float = Form(1.5),
+    style_prompt: str = Form(""),
 ):
-    """Accept a CAD file upload, create a background job, return job_id."""
+    """Accept a CAD file upload + style prompt, create a background job, return job_id."""
     # Save uploaded file
     suffix = Path(file.filename or "upload.glb").suffix
     tmp_path = UPLOAD_DIR / f"{jobs.create_job()}{suffix}"
@@ -790,7 +840,7 @@ async def create_job(
 
     # Fire-and-forget background task
     asyncio.create_task(
-        _run_pipeline(job_id, tmp_path, explode_scalar)
+        _run_pipeline(job_id, tmp_path, explode_scalar, style_prompt)
     )
 
     return {"job_id": job_id}
@@ -817,7 +867,9 @@ def get_video(job_id: str):
     return FileResponse(str(video_path), media_type="video/mp4")
 
 
-async def _run_pipeline(job_id: str, cad_path: Path, scalar: float) -> None:
+async def _run_pipeline(
+    job_id: str, cad_path: Path, scalar: float, style_prompt: str = ""
+) -> None:
     """Run all 4 pipeline phases in a background asyncio task."""
     output_dir = UPLOAD_DIR / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -837,7 +889,8 @@ async def _run_pipeline(job_id: str, cad_path: Path, scalar: float) -> None:
         from pipeline.phase2_snapshots import SnapshotRenderer
         renderer = SnapshotRenderer()
         frame_set = await asyncio.to_thread(
-            renderer.render, meshes, vectors, master, output_dir / "raw", scalar
+            renderer.render, meshes, vectors, master,
+            output_dir / "raw", scalar, style_prompt   # style_prompt carried into FrameSet
         )
         jobs.update_phase(job_id, 2, "done")
 
@@ -956,10 +1009,15 @@ export interface JobStatus {
   video_url: string | null
 }
 
-export async function createJob(file: File, explodeScalar: number): Promise<string> {
+export async function createJob(
+  file: File,
+  explodeScalar: number,
+  stylePrompt: string,
+): Promise<string> {
   const form = new FormData()
   form.append('file', file)
   form.append('explode_scalar', String(explodeScalar))
+  form.append('style_prompt', stylePrompt)
 
   const resp = await fetch('/jobs', { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Upload failed: ${resp.statusText}`)
@@ -1073,6 +1131,104 @@ export function UploadZone({ onUpload, disabled }: Props) {
 ```bash
 git add frontend/src/components/UploadZone.tsx
 git commit -m "feat: UploadZone — drag-and-drop CAD file upload with explosion slider"
+```
+
+---
+
+## Task 7b: Frontend — PromptInput Component
+
+**Files:**
+- Create: `frontend/src/components/PromptInput.tsx`
+
+`★ Insight ─────────────────────────────────────`
+The prompt input sits above the upload zone so users set their aesthetic *before* choosing a file — matching the mental model of "choose style, then upload". Example prompts serve as creative seeds and reduce blank-slate paralysis. The structural constraint (preserve geometry) is always applied by Phase 3 regardless of what the user types, so there's no need to mention it in the UI.
+`─────────────────────────────────────────────────`
+
+- [ ] **Step 1: Implement `PromptInput`**
+
+```tsx
+// frontend/src/components/PromptInput.tsx
+import { useState } from 'react'
+
+const EXAMPLES = [
+  "Brushed steel on white marble, soft diffused studio light",
+  "Dark cyberpunk aesthetic, neon edge lighting, black background",
+  "Luxury product photography, warm golden hour, shallow depth of field",
+  "Clean Scandinavian design, matte white surfaces, natural daylight",
+  "High-tech military grade, dark olive and carbon fibre, harsh spotlight",
+]
+
+interface Props {
+  value: string
+  onChange: (value: string) => void
+  disabled?: boolean
+}
+
+export function PromptInput({ value, onChange, disabled }: Props) {
+  const [expanded, setExpanded] = useState(false)
+
+  return (
+    <div className="w-full max-w-xl flex flex-col gap-2">
+      <label className="text-sm font-medium text-gray-700">
+        Style prompt
+        <span className="ml-1 text-gray-400 font-normal">(optional — leave blank for default studio look)</span>
+      </label>
+
+      <textarea
+        rows={3}
+        placeholder="Describe the visual style you want — lighting, materials, mood, background..."
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className={`
+          w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm
+          resize-none focus:outline-none focus:ring-2 focus:ring-blue-400
+          placeholder:text-gray-400
+          ${disabled ? 'opacity-50 pointer-events-none' : ''}
+        `}
+      />
+
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="self-start text-xs text-blue-500 hover:text-blue-700"
+        disabled={disabled}
+      >
+        {expanded ? '▲ Hide examples' : '▼ Show example prompts'}
+      </button>
+
+      {expanded && (
+        <div className="flex flex-col gap-1">
+          {EXAMPLES.map((ex) => (
+            <button
+              key={ex}
+              type="button"
+              onClick={() => { onChange(ex); setExpanded(false) }}
+              disabled={disabled}
+              className="text-left text-xs text-gray-500 hover:text-gray-800 hover:bg-gray-100
+                         rounded px-2 py-1 transition-colors"
+            >
+              "{ex}"
+            </button>
+          ))}
+        </div>
+      )}
+
+      {value.trim() && (
+        <p className="text-xs text-gray-400">
+          Geometry and structure are always preserved — your prompt controls lighting, materials, and mood.
+        </p>
+      )}
+    </div>
+  )
+}
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add frontend/src/components/PromptInput.tsx
+git commit -m "feat: PromptInput — style prompt textarea with expandable example prompts"
 ```
 
 ---
@@ -1207,6 +1363,7 @@ git commit -m "feat: PipelineProgress phase tracker + VideoPreview player"
 // frontend/src/App.tsx
 import { useState, useEffect, useRef } from 'react'
 import { UploadZone } from './components/UploadZone'
+import { PromptInput } from './components/PromptInput'
 import { PipelineProgress } from './components/PipelineProgress'
 import { VideoPreview } from './components/VideoPreview'
 import { createJob, getJobStatus, JobStatus } from './api/client'
@@ -1217,12 +1374,13 @@ export default function App() {
   const [state, setState] = useState<AppState>('idle')
   const [jobId, setJobId] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
+  const [stylePrompt, setStylePrompt] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   async function handleUpload(file: File, scalar: number) {
     try {
       setState('uploading')
-      const id = await createJob(file, scalar)
+      const id = await createJob(file, scalar, stylePrompt)
       setJobId(id)
       setState('processing')
     } catch (e) {
@@ -1260,7 +1418,14 @@ export default function App() {
       </header>
 
       {(state === 'idle' || state === 'uploading') && (
-        <UploadZone onUpload={handleUpload} disabled={state === 'uploading'} />
+        <>
+          <PromptInput
+            value={stylePrompt}
+            onChange={setStylePrompt}
+            disabled={state === 'uploading'}
+          />
+          <UploadZone onUpload={handleUpload} disabled={state === 'uploading'} />
+        </>
       )}
 
       {(state === 'processing' || state === 'error') && jobStatus && (
@@ -1275,6 +1440,7 @@ export default function App() {
               setState('idle')
               setJobId(null)
               setJobStatus(null)
+              setStylePrompt('')
             }}
             className="text-sm text-gray-400 hover:text-gray-600 underline"
           >
@@ -1353,6 +1519,10 @@ def main():
     parser.add_argument("--explode", type=float, default=1.5, help="Explosion scalar multiplier")
     parser.add_argument("--output", default="output/exploded_view.mp4", help="Output video path")
     parser.add_argument("--frames-dir", default="output/frames", help="Directory for PNG frames")
+    parser.add_argument(
+        "--style-prompt", default="",
+        help='Aesthetic style prompt e.g. "Dark marble, dramatic rim lighting"'
+    )
     args = parser.parse_args()
 
     frames_dir = Path(args.frames_dir)
@@ -1375,11 +1545,18 @@ def main():
 
     print("[Phase 2] Rendering keyframes ...")
     renderer = SnapshotRenderer()
-    frame_set = renderer.render(meshes, vectors, master, output_dir=frames_dir / "raw", scalar=args.explode)
+    frame_set = renderer.render(
+        meshes, vectors, master,
+        output_dir=frames_dir / "raw", scalar=args.explode,
+        style_prompt=args.style_prompt,
+    )
     print(f"[Phase 2] Frames at {frames_dir}/raw/")
+    if args.style_prompt:
+        print(f"[Phase 2] Style: {args.style_prompt}")
 
     print("[Phase 3] Gemini stylization ...")
     stylizer = GeminiStylizer()
+    # style_prompt is already in frame_set.metadata — GeminiStylizer reads it from there
     stylized = stylizer.stylize(frame_set, output_dir=frames_dir / "stylized")
     print(f"[Phase 3] Stylized frames at {frames_dir}/stylized/")
 

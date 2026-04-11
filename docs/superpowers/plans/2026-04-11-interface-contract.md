@@ -24,6 +24,7 @@ class PipelineMetadata:
     explosion_scalar: float         # E multiplier applied to explosion vectors
     component_count: int            # number of unique mesh IDs detected
     camera_angles_deg: list[float]  # [0.0, 15.0, 30.0] — camera orbit at each frame
+    style_prompt: str = ""          # user-supplied aesthetic prompt; passed through to Phase 3 + 4
 
 
 @dataclass
