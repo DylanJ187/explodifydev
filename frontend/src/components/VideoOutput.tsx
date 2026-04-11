@@ -28,7 +28,6 @@ export function VideoOutput({ jobId, showBase = false }: Props) {
           </a>
         </div>
         <div className="video-hero-stage">
-          <div className="video-hero-vignette" />
           <video
             src={styledUrl}
             controls

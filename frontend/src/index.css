@@ -1329,47 +1329,19 @@ input[type='range']::-moz-range-thumb {
   font-size: 9px;
 }
 
-/* Video stage — edge-to-edge cinematic */
+/* Video stage — full-width, 16:9 */
 .review-video-stage {
-  position: relative;
-  flex: 1;
   background: #000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 0;
+  width: 100%;
+  flex-shrink: 0;
 }
 
 .review-video {
   width: 100%;
-  max-height: 62vh;
+  aspect-ratio: 16 / 9;
   display: block;
   object-fit: contain;
-  position: relative;
-  z-index: 2;
-}
-
-.review-vignette {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,0.7) 100%);
-  pointer-events: none;
-  z-index: 3;
-}
-
-.review-scanlines {
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(
-    to bottom,
-    transparent,
-    transparent 3px,
-    rgba(0,0,0,0.07) 3px,
-    rgba(0,0,0,0.07) 4px
-  );
-  pointer-events: none;
-  z-index: 4;
-  opacity: 0.5;
+  background: #000;
 }
 
 /* Action row */
@@ -1754,19 +1726,10 @@ input[type='range']::-moz-range-thumb {
 }
 
 .video-hero-stage {
-  position: relative;
   background: #000;
   border-radius: 4px;
   overflow: hidden;
   border: 1px solid #1a1a1a;
-}
-
-.video-hero-vignette {
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.5) 100%);
-  pointer-events: none;
-  z-index: 2;
 }
 
 .video-hero-player {
@@ -1775,8 +1738,6 @@ input[type='range']::-moz-range-thumb {
   display: block;
   object-fit: contain;
   background: #000;
-  position: relative;
-  z-index: 1;
 }
 
 /* Comparison base video */

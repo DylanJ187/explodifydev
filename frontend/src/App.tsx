@@ -346,9 +346,8 @@ function ApprovalGate({
         </div>
       </div>
 
-      {/* Video — cinematic, dominant */}
+      {/* Video — dominant, plain player */}
       <div className="review-video-stage">
-        <div className="review-vignette" />
         <video
           src={`/jobs/${jobId}/base_video`}
           controls
@@ -357,7 +356,6 @@ function ApprovalGate({
           playsInline
           className="review-video"
         />
-        <div className="review-scanlines" />
       </div>
 
       {/* Action row */}
