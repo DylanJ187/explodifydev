@@ -183,9 +183,25 @@ class SnapshotRenderer:
         footprint = all_verts - np.outer(depth, orbited)
         scale = np.linalg.norm(footprint.max(axis=0) - footprint.min(axis=0))
 
+        # Apply rotation offset by rotating all geometry around the camera
+        # viewing axis.  This matches the CSS `rotate(Xdeg)` preview exactly —
+        # the object appears to spin in-place when viewed from the camera.
+        if abs(up_rotation_deg) > 0.01:
+            rot_axis = orbited / np.linalg.norm(orbited)
+            rot_matrix = trimesh.transformations.rotation_matrix(
+                math.radians(up_rotation_deg), rot_axis, center,
+            )
+            for m in meshes:
+                m.apply_transform(rot_matrix)
+            # Recompute after rotation
+            all_verts = np.vstack([m.vertices for m in meshes])
+            center = np.mean([m.centroid for m in meshes], axis=0)
+            depth = all_verts @ orbited
+            footprint = all_verts - np.outer(depth, orbited)
+            scale = np.linalg.norm(footprint.max(axis=0) - footprint.min(axis=0))
+
         cam_pos = center + orbited * scale * 2.0
-        up_hint = _compute_up_vector(orbited, up_rotation_deg)
-        cam_pose = _look_at(cam_pos, center, up_hint=up_hint)
+        cam_pose = _look_at(cam_pos, center)
 
         res = resolution if resolution is not None else RESOLUTION
         cam = pyrender.PerspectiveCamera(
