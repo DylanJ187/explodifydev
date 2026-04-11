@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { UploadZone } from './components/UploadZone'
 import { OrientationPicker } from './components/OrientationPicker'
 import { StylePanel } from './components/StylePanel'
@@ -176,15 +176,6 @@ export default function App() {
               </section>
 
               <section className="panel-section animate-fade-in">
-                <div className="section-label">Orientation</div>
-                <OrientationPicker
-                  selectedFace={selectedFace}
-                  onFaceChange={setSelectedFace}
-                  disabled={controlsDisabled}
-                />
-              </section>
-
-              <section className="panel-section animate-fade-in">
                 <div className="section-label">Style &amp; Parameters</div>
                 <StylePanel
                   options={styleOptions}
@@ -254,6 +245,8 @@ export default function App() {
           <OrientationPreview
             imageSrc={preview.images[selectedFace]}
             faceName={selectedFace}
+            selectedFace={selectedFace}
+            onFaceChange={setSelectedFace}
           />
         )}
 
@@ -278,14 +271,27 @@ export default function App() {
   )
 }
 
-/* Inline component — face preview during orientation selection */
+/* Inline component — face preview + orientation/rotation controls on right panel */
 function OrientationPreview({
   imageSrc,
   faceName,
+  selectedFace,
+  onFaceChange,
 }: {
   imageSrc: string
   faceName: string
+  selectedFace: FaceName
+  onFaceChange: (face: FaceName) => void
 }) {
+  const [rotation, setRotation] = useState(0)
+
+  const rotate = useCallback(() => {
+    setRotation(prev => (prev + 90) % 360)
+  }, [])
+
+  // Reset rotation when face changes
+  useEffect(() => { setRotation(0) }, [selectedFace])
+
   return (
     <div className="orient-preview-panel animate-fade-in">
       <div className="orient-preview-label">{faceName} view</div>
@@ -294,12 +300,22 @@ function OrientationPreview({
           src={imageSrc}
           alt={`${faceName} orientation preview`}
           className="orient-preview-img"
+          style={{ transform: `rotate(${rotation}deg)` }}
           draggable={false}
         />
       </div>
-      <p className="orient-preview-hint">
-        Select a face on the left to set the camera direction
-      </p>
+
+      <div className="orient-controls">
+        <OrientationPicker
+          selectedFace={selectedFace}
+          onFaceChange={onFaceChange}
+        />
+
+        <button className="rotate-btn" onClick={rotate}>
+          ↻ Rotate
+          {rotation !== 0 && <span className="rotate-badge">{rotation}°</span>}
+        </button>
+      </div>
     </div>
   )
 }

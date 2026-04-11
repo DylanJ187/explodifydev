@@ -101,7 +101,7 @@ class SnapshotRenderer:
         import pyrender
 
         pr_scene = pyrender.Scene(
-            bg_color=[0.0, 0.0, 0.0, 1.0],
+            bg_color=[0.0, 0.0, 0.0, 0.0],
             ambient_light=[0.35, 0.35, 0.35],
         )
 
@@ -153,8 +153,11 @@ class SnapshotRenderer:
 
         offscreen = pyrender.OffscreenRenderer(*res)
         try:
-            color, _ = offscreen.render(pr_scene)
-            return Image.fromarray(color)
+            color, _ = offscreen.render(
+                pr_scene,
+                flags=pyrender.RenderFlags.RGBA,
+            )
+            return Image.fromarray(color, mode="RGBA")
         finally:
             offscreen.delete()
 

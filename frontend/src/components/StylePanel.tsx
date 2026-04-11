@@ -105,7 +105,7 @@ export function StylePanel({
             disabled={disabled}
           />
           <span className="slider-value">{orbitRangeDeg}°</span>
-          <InfoIcon text="Total orbit from frame 1 to frame 5. Capped at 60° for fal.ai — Kling hallucinates geometry when consecutive reference frames differ by more than ~15°." />
+          <InfoIcon text="Total orbit from frame 1 to frame 5. Capped at 60° for Kling interpolation safety." />
         </div>
       </div>
 
