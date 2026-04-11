@@ -42,7 +42,7 @@ Phase 3: AI Stylization (Gemini Flash — Google Deepmind)
     │    clean white background."
     │  • Output: 3 photorealistic keyframes preserving exact geometry
     ▼
-Phase 4: Video Synthesis (fal.ai — Kling / Luma)
+Phase 4: Video Synthesis (fal.ai)
     │  • Upload 3 stylized keyframes to fal.ai video model
     │  • Use Start / Middle / End frame anchoring
     │    (forces AI to respect Trimesh-calculated geometry at 50% mark)
@@ -71,7 +71,7 @@ Output: studio-grade exploded-view animation
 | Geometry | [Trimesh](https://trimesh.org/) | Assembly analysis, explosion vectors, ray-casting |
 | Rendering | [pyrender](https://pyrender.readthedocs.io/) | Headless PNG snapshot export |
 | AI Stylization | [Gemini Flash](https://deepmind.google/) (Google Deepmind) | Image-to-image photorealistic render |
-| Video Synthesis | [fal.ai](https://fal.ai/) — Kling / Luma | Keyframe-anchored video interpolation |
+| Video Synthesis | [fal.ai](https://fal.ai/) | Keyframe-anchored video interpolation |
 | Backend | Python 3.11+ | Pipeline orchestration |
 | Frontend | React + FastAPI | Web upload UI, progress tracking, video preview |
 
