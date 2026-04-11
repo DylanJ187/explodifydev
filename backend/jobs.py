@@ -18,6 +18,10 @@ _jobs: dict[str, JobStatus] = {}
 # job_id → asyncio.Event (set when user approves; deleted when job finishes)
 _approval_events: dict[str, asyncio.Event] = {}
 
+# Style overrides submitted at approval time (user may tweak style while
+# reviewing the base video).  job_id → dict of style fields.
+_approval_style: dict[str, dict] = {}
+
 
 def create_job() -> str:
     job_id = str(uuid.uuid4())
@@ -65,16 +69,27 @@ def mark_awaiting_approval(job_id: str) -> asyncio.Event:
     return event
 
 
-def approve_phase4(job_id: str) -> bool:
-    """Signal Phase 4 to proceed. Returns False if no pending approval exists."""
+def approve_phase4(job_id: str, style_overrides: dict | None = None) -> bool:
+    """Signal Phase 4 to proceed. Returns False if no pending approval exists.
+
+    If style_overrides is provided, the pipeline will use these instead of
+    the options submitted at job creation time.
+    """
     event = _approval_events.pop(job_id, None)
     if event is None:
         return False
+    if style_overrides:
+        _approval_style[job_id] = style_overrides
     event.set()
     return True
 
 
-def mark_done(job_id: str, _unused: None = None) -> None:
+def get_approval_style(job_id: str) -> dict | None:
+    """Pop and return style overrides submitted at approval time, if any."""
+    return _approval_style.pop(job_id, None)
+
+
+def mark_done(job_id: str, _unused: None = None, ai_styled: bool = False) -> None:
     new_phases = {i: PhaseStatus.done for i in range(1, 5)}
     _jobs[job_id] = JobStatus(
         job_id=job_id,
@@ -82,6 +97,7 @@ def mark_done(job_id: str, _unused: None = None) -> None:
         current_phase=4,
         current_phase_name=PHASE_NAMES[4],
         phases=new_phases,
+        ai_styled=ai_styled,
     )
 
 

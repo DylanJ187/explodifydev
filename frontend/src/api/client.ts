@@ -11,6 +11,7 @@ export interface JobStatus {
   current_phase_name: string
   phases: PhaseStatus
   error: string | null
+  ai_styled: boolean
 }
 
 export type FaceName =
@@ -76,8 +77,38 @@ export async function getJobStatus(jobId: string): Promise<JobStatus> {
   return resp.json()
 }
 
-export async function approvePhase4(jobId: string): Promise<void> {
-  const resp = await fetch(`/jobs/${jobId}/approve`, { method: 'POST' })
+export async function approvePhase4(
+  jobId: string,
+  styleOpts?: {
+    materialPrompt: string
+    stylePrompt: string
+    studioLighting: boolean
+    darkBackdrop: boolean
+    whiteBackdrop: boolean
+    warmTone: boolean
+    coldTone: boolean
+    groundShadow: boolean
+  },
+): Promise<void> {
+  const form = new FormData()
+  if (styleOpts) {
+    form.append('material_prompt', styleOpts.materialPrompt)
+    form.append('style_prompt', styleOpts.stylePrompt)
+    form.append('studio_lighting', String(styleOpts.studioLighting))
+    form.append('dark_backdrop', String(styleOpts.darkBackdrop))
+    form.append('white_backdrop', String(styleOpts.whiteBackdrop))
+    form.append('warm_tone', String(styleOpts.warmTone))
+    form.append('cold_tone', String(styleOpts.coldTone))
+    form.append('ground_shadow', String(styleOpts.groundShadow))
+  }
+  const resp = await fetch(`/jobs/${jobId}/approve`, { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Approval failed: ${resp.statusText}`)
+}
+
+export async function createDemoJob(): Promise<string> {
+  const resp = await fetch('/demo', { method: 'POST' })
+  if (!resp.ok) throw new Error(`Demo creation failed: ${resp.statusText}`)
+  const data = await resp.json()
+  return data.job_id as string
 }
 

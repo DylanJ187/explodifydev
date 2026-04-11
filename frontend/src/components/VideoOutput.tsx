@@ -2,30 +2,33 @@
 
 interface Props {
   jobId: string
+  aiStyled: boolean
 }
 
-export function VideoOutput({ jobId }: Props) {
-  const styledUrl = `/jobs/${jobId}/video`
+export function VideoOutput({ jobId, aiStyled }: Props) {
+  const videoUrl = `/jobs/${jobId}/video`
+  const label = aiStyled ? 'AI STYLED VIDEO' : 'BASE RENDER'
+  const badge = aiStyled ? 'FINAL OUTPUT' : 'UNSTYLED OUTPUT'
 
   return (
     <div className="video-output-section animate-fade-in">
       <div className="video-hero">
         <div className="video-hero-header">
           <div className="video-hero-title-row">
-            <span className="video-hero-badge">FINAL OUTPUT</span>
-            <span className="video-hero-title">AI STYLED VIDEO</span>
+            <span className="video-hero-badge">{badge}</span>
+            <span className="video-hero-title">{label}</span>
           </div>
           <a
             className="video-dl-btn"
-            href={styledUrl}
-            download={`explodify_styled_${jobId}.mp4`}
+            href={videoUrl}
+            download={`explodify_${aiStyled ? 'styled' : 'base'}_${jobId}.mp4`}
           >
             ↓ Download
           </a>
         </div>
         <div className="video-hero-stage">
           <video
-            src={styledUrl}
+            src={videoUrl}
             controls
             autoPlay
             loop

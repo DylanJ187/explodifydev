@@ -6,7 +6,7 @@ import { StylePanel } from './components/StylePanel'
 import { IdleOutput } from './components/IdleOutput'
 import { LoadingOutput } from './components/LoadingOutput'
 import { VideoOutput } from './components/VideoOutput'
-import { getPreviewImages, createJob, getJobStatus, approvePhase4 } from './api/client'
+import { getPreviewImages, createJob, getJobStatus, approvePhase4, createDemoJob } from './api/client'
 import type { JobStatus, FaceName, PreviewResult } from './api/client'
 
 type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'awaiting_approval' | 'styling' | 'done' | 'error'
@@ -133,10 +133,32 @@ export default function App() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [state, jobId])
 
+  async function handleLoadDemo() {
+    setErrorMsg(null)
+    try {
+      setState('uploading')
+      const id = await createDemoJob()
+      setJobId(id)
+      setState('awaiting_approval')
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Demo load failed')
+      setState('error')
+    }
+  }
+
   async function handleApprove() {
     if (!jobId) return
     try {
-      await approvePhase4(jobId)
+      await approvePhase4(jobId, {
+        materialPrompt: styleOptions.materialPrompt,
+        stylePrompt: styleOptions.prompt,
+        studioLighting: styleOptions.studioLighting,
+        darkBackdrop: styleOptions.darkBackdrop,
+        whiteBackdrop: styleOptions.whiteBackdrop,
+        warmTone: styleOptions.warmTone,
+        coldTone: styleOptions.coldTone,
+        groundShadow: styleOptions.groundShadow,
+      })
       setState('styling')
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Approval failed')
@@ -158,7 +180,7 @@ export default function App() {
   }
 
   const showControls = state === 'orientation' || state === 'processing' || state === 'awaiting_approval' || state === 'styling' || state === 'done'
-  const controlsDisabled = state !== 'orientation'
+  const controlsDisabled = state !== 'orientation' && state !== 'awaiting_approval'
 
   return (
     <div className="app-layout">
@@ -180,6 +202,13 @@ export default function App() {
                 onLoadSample={handleLoadSample}
                 loading={state === 'uploading'}
               />
+              <button
+                className="demo-btn"
+                onClick={handleLoadDemo}
+                disabled={state === 'uploading'}
+              >
+                Try Demo Output
+              </button>
             </section>
           )}
 
@@ -244,7 +273,7 @@ export default function App() {
                 <section className="panel-section animate-fade-in">
                   <div className="done-indicator">
                     <span>✓</span>
-                    Styled video ready
+                    {jobStatus?.ai_styled ? 'Styled video ready' : 'Base render ready'}
                   </div>
                   <button className="reupload-btn" onClick={reset}>
                     ↺&nbsp;&nbsp;Start over with new file
@@ -299,7 +328,10 @@ export default function App() {
         )}
 
         {state === 'done' && jobId && (
-          <VideoOutput jobId={jobId} />
+          <VideoOutput
+            jobId={jobId}
+            aiStyled={jobStatus?.ai_styled ?? false}
+          />
         )}
 
         {state === 'error' && (

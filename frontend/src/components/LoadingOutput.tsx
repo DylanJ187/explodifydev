@@ -30,7 +30,7 @@ const PIPELINE_PHRASES = [
 
 const PIPELINE_PHASES = [
   { id: 1, name: 'Geometry',  detail: 'Explosion vectors' },
-  { id: 2, name: 'Render',    detail: '72 frames at 1920×1080' },
+  { id: 2, name: 'Render',    detail: '72 frames · 1920×1080' },
   { id: 3, name: 'Assembly',  detail: 'ffmpeg → mp4' },
 ]
 
@@ -39,6 +39,8 @@ const STYLING_STAGES = [
   { key: 'process',  label: 'PROCESS',  sub: 'Kling o1 applying style' },
   { key: 'download', label: 'DOWNLOAD', sub: 'Retrieving styled video' },
 ]
+
+const TOTAL_STYLING_SECS = 180
 
 function computeProgress(jobStatus: JobStatus | null): number {
   if (!jobStatus) return 5
@@ -71,7 +73,6 @@ function useStylingStage(active: boolean): string {
     if (!active) return
     const tick = setInterval(() => {
       elapsed.current += 1
-      // upload finishes ~15s, process runs until ~160s, then download
       if (elapsed.current < 15) setStage('upload')
       else if (elapsed.current < 160) setStage('process')
       else setStage('download')
@@ -82,13 +83,17 @@ function useStylingStage(active: boolean): string {
   return stage
 }
 
-function useElapsedTime(active: boolean): string {
+function useElapsedSeconds(active: boolean): number {
   const [secs, setSecs] = useState(0)
   useEffect(() => {
     if (!active) return
     const t = setInterval(() => setSecs(s => s + 1), 1000)
     return () => clearInterval(t)
   }, [active])
+  return secs
+}
+
+function formatTime(secs: number): string {
   const m = Math.floor(secs / 60)
   const s = secs % 60
   return `${m}:${String(s).padStart(2, '0')}`
@@ -97,98 +102,124 @@ function useElapsedTime(active: boolean): string {
 // ─── Styling-specific dramatic loader ────────────────────────────────────────
 function StylingLoader() {
   const stage = useStylingStage(true)
-  const elapsed = useElapsedTime(true)
+  const elapsedSecs = useElapsedSeconds(true)
   const [tick, setTick] = useState(0)
 
   useEffect(() => {
-    const t = setInterval(() => setTick(n => n + 1), 80)
+    const t = setInterval(() => setTick(n => n + 1), 70)
     return () => clearInterval(t)
   }, [])
 
   const stageIdx = STYLING_STAGES.findIndex(s => s.key === stage)
   const currentStage = STYLING_STAGES[stageIdx]
 
-  return (
-    <div className="styling-loader animate-fade-in">
-      {/* Ambient dot-grid background */}
-      <div className="styling-grid-bg" />
+  // Progress: smooth fill capped at 95% until actually done
+  const rawProgress = Math.min((elapsedSecs / TOTAL_STYLING_SECS) * 100, 95)
+  const progressPct = rawProgress
 
-      {/* Top bar */}
-      <div className="styling-topbar">
-        <div className="styling-topbar-left">
-          <span className="styling-topbar-dot" />
-          <span className="styling-topbar-label">KLING O1 · FAL.AI</span>
+  const isOverTime = elapsedSecs > TOTAL_STYLING_SECS
+
+  return (
+    <div className="sl-root animate-fade-in">
+      {/* Scan-line texture */}
+      <div className="sl-scanlines" />
+
+      {/* Top progress bar — full width, prominent */}
+      <div className="sl-progress-rail">
+        <div className="sl-progress-fill" style={{ width: `${progressPct}%` }}>
+          <div className="sl-progress-glow" />
         </div>
-        <div className="styling-topbar-right">
-          <span className="styling-elapsed">{elapsed}</span>
-          <span className="styling-topbar-label">/ ~3:00</span>
+      </div>
+
+      {/* Header bar */}
+      <div className="sl-header">
+        <div className="sl-header-left">
+          <span className="sl-dot" />
+          <span className="sl-label">KLING O1 &nbsp;·&nbsp; FAL.AI</span>
+        </div>
+        <div className="sl-header-right">
+          <span className={`sl-timer ${isOverTime ? 'sl-timer--over' : ''}`}>
+            {formatTime(elapsedSecs)}
+          </span>
+          <span className="sl-label sl-label--dim">/ ~3:00</span>
         </div>
       </div>
 
       {/* Central content */}
-      <div className="styling-center">
-        <div className="styling-phase-name">
-          AI&nbsp;STYLING
-        </div>
-        <div className="styling-current-op">
-          {currentStage?.sub}
+      <div className="sl-body">
+        {/* Phase title */}
+        <div className="sl-title">AI&nbsp;STYLING</div>
+        <div className="sl-subtitle">{currentStage?.sub}</div>
+
+        {/* Time warning */}
+        <div className={`sl-time-warning ${isOverTime ? 'sl-time-warning--over' : ''}`}>
+          {isOverTime
+            ? 'Running longer than expected — please wait'
+            : 'This may take 2–3 minutes · do not close this window'}
         </div>
 
-        {/* Oscilloscope-style waveform */}
-        <div className="styling-wave">
-          {Array.from({ length: 40 }, (_, i) => {
-            const phase = (i / 40) * Math.PI * 4 + tick * 0.18
-            const h = Math.abs(Math.sin(phase) * 36) + 4
+        {/* Waveform visualiser */}
+        <div className="sl-wave">
+          {Array.from({ length: 48 }, (_, i) => {
+            const a = (i / 48) * Math.PI * 6 + tick * 0.15
+            const b = (i / 48) * Math.PI * 3 + tick * 0.09
+            const h = Math.abs(Math.sin(a) * 28 + Math.sin(b) * 14) + 3
             return (
               <div
                 key={i}
-                className="styling-wave-bar"
-                style={{
-                  height: `${h}px`,
-                  opacity: 0.3 + (h / 40) * 0.7,
-                }}
+                className="sl-wave-bar"
+                style={{ height: `${h}px`, opacity: 0.25 + (h / 42) * 0.75 }}
               />
             )
           })}
         </div>
+
+        {/* Progress percentage readout */}
+        <div className="sl-pct-row">
+          <span className="sl-pct-value">{Math.round(progressPct)}</span>
+          <span className="sl-pct-unit">%</span>
+        </div>
       </div>
 
       {/* Stage tracker */}
-      <div className="styling-stages">
+      <div className="sl-stages">
         {STYLING_STAGES.map((s, idx) => {
           const isDone = idx < stageIdx
           const isActive = idx === stageIdx
           return (
-            <div key={s.key} className="styling-stage-item">
+            <div key={s.key} className="sl-stage-item">
               {idx > 0 && (
-                <div className={`styling-stage-line ${isDone || isActive ? 'styling-stage-line--lit' : ''}`} />
+                <div className={`sl-stage-line ${isDone ? 'sl-stage-line--done' : isActive ? 'sl-stage-line--active' : ''}`} />
               )}
-              <div className={`styling-stage-node ${isActive ? 'styling-stage-node--active' : ''} ${isDone ? 'styling-stage-node--done' : ''}`}>
-                {isDone ? '✓' : isActive ? <span className="styling-node-pulse" /> : idx + 1}
+              <div className={`sl-stage-node ${isActive ? 'sl-stage-node--active' : ''} ${isDone ? 'sl-stage-node--done' : ''}`}>
+                {isDone ? '✓' : isActive ? <span className="sl-node-pulse" /> : <span className="sl-node-num">{idx + 1}</span>}
               </div>
-              <div className="styling-stage-label-wrap">
-                <span className={`styling-stage-label ${isActive ? 'styling-stage-label--active' : ''} ${isDone ? 'styling-stage-label--done' : ''}`}>
+              <div className="sl-stage-meta">
+                <span className={`sl-stage-name ${isActive ? 'sl-stage-name--active' : ''} ${isDone ? 'sl-stage-name--done' : ''}`}>
                   {s.label}
                 </span>
+                <span className="sl-stage-sub">{s.sub}</span>
               </div>
             </div>
           )
         })}
       </div>
 
-      {/* Bottom warning */}
-      <div className="styling-footer">
-        Do not close this window &nbsp;·&nbsp; FAL credits are being consumed
+      {/* Footer */}
+      <div className="sl-footer">
+        <span className="sl-footer-dot" />
+        FAL credits are being consumed &nbsp;·&nbsp; do not close this window
       </div>
     </div>
   )
 }
 
-// ─── Standard pipeline/orientation loader ─────────────────────────────────
+// ─── Standard pipeline / orientation loader ───────────────────────────────────
 function StandardLoader({ phase, jobStatus }: { phase: 'orientation' | 'pipeline', jobStatus: JobStatus | null }) {
   const phrases = phase === 'orientation' ? ORIENTATION_PHRASES : PIPELINE_PHRASES
   const [phraseIndex, setPhraseIndex] = useState(0)
   const [fading, setFading] = useState(false)
+  const [tick, setTick] = useState(0)
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -197,55 +228,82 @@ function StandardLoader({ phase, jobStatus }: { phase: 'orientation' | 'pipeline
         setPhraseIndex(i => (i + 1) % phrases.length)
         setFading(false)
       }, 350)
-    }, 2600)
+    }, 2800)
     return () => clearInterval(timer)
   }, [phrases.length])
+
+  useEffect(() => {
+    const t = setInterval(() => setTick(n => n + 1), 80)
+    return () => clearInterval(t)
+  }, [])
 
   const progress = phase === 'orientation' ? 20 : computeProgress(jobStatus)
   const displayName = phase === 'orientation' ? 'ORIENTATION' : getPhaseDisplayName(jobStatus)
   const displayDetail = phase === 'orientation' ? 'Computing 6 face previews' : getPhaseDetail(jobStatus)
 
   return (
-    <div className="loading-output animate-fade-in">
-      <div className="progress-track">
-        <div className="progress-fill" style={{ width: `${progress}%` }} />
+    <div className="pl-root animate-fade-in">
+      {/* Top progress bar */}
+      <div className="pl-progress-rail">
+        <div className="pl-progress-fill" style={{ width: `${progress}%` }}>
+          <div className="pl-progress-glow" />
+        </div>
+        <span className="pl-progress-pct">{progress}%</span>
       </div>
 
-      <div className="loading-body">
-        <div className="loading-phase-display">
-          <div className="loading-phase-name">{displayName}</div>
-          {displayDetail && (
-            <div className="loading-phase-detail">{displayDetail}</div>
-          )}
+      <div className="pl-body">
+        {/* Phase name + detail */}
+        <div className="pl-phase-block">
+          <div className="pl-phase-name">{displayName}</div>
+          {displayDetail && <div className="pl-phase-detail">{displayDetail}</div>}
         </div>
 
-        <div className="loading-bars">
-          {Array.from({ length: 15 }, (_, i) => (
-            <div
-              key={i}
-              className="loading-bar"
-              style={{ animationDelay: `${i * 0.08}s` }}
-            />
-          ))}
+        {/* Animated waveform bars */}
+        <div className="pl-wave">
+          {Array.from({ length: 24 }, (_, i) => {
+            const a = (i / 24) * Math.PI * 4 + tick * 0.14
+            const h = Math.abs(Math.sin(a) * 22) + 4
+            return (
+              <div
+                key={i}
+                className="pl-wave-bar"
+                style={{ height: `${h}px`, opacity: 0.2 + (h / 26) * 0.8 }}
+              />
+            )
+          })}
         </div>
 
-        <div className={['loading-cycling-text', fading ? 'loading-cycling-text--fading' : ''].join(' ')}>
+        {/* Cycling phrase */}
+        <div className={`pl-phrase ${fading ? 'pl-phrase--fade' : ''}`}>
           {phrases[phraseIndex]}
         </div>
 
+        {/* Phase tracker — only during pipeline */}
         {phase === 'pipeline' && (
-          <div className="loading-phases-row">
+          <div className="pl-phases">
             {PIPELINE_PHASES.map((p, idx) => {
               const status = jobStatus?.phases[p.id] ?? 'pending'
               const isActive = status === 'running'
               const isDone = status === 'done'
               return (
-                <div key={p.id} style={{ display: 'flex', alignItems: 'center' }}>
-                  <div className={['phase-step', isActive ? 'phase-step--active' : '', isDone ? 'phase-step--done' : ''].join(' ')}>
-                    <div className="phase-step-dot" />
-                    <span className="phase-step-label">{p.name}</span>
+                <div key={p.id} className="pl-phase-row">
+                  {idx > 0 && (
+                    <div className={`pl-connector ${isDone || isActive ? 'pl-connector--lit' : ''}`} />
+                  )}
+                  <div className={`pl-phase-step ${isActive ? 'pl-phase-step--active' : ''} ${isDone ? 'pl-phase-step--done' : ''}`}>
+                    <div className="pl-step-indicator">
+                      {isDone
+                        ? <span className="pl-step-check">✓</span>
+                        : isActive
+                          ? <span className="pl-step-pulse" />
+                          : <span className="pl-step-num">{p.id}</span>
+                      }
+                    </div>
+                    <div className="pl-step-text">
+                      <span className="pl-step-name">{p.name}</span>
+                      <span className="pl-step-detail">{p.detail}</span>
+                    </div>
                   </div>
-                  {idx < PIPELINE_PHASES.length - 1 && <div className="phase-connector" />}
                 </div>
               )
             })}

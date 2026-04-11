@@ -236,8 +236,22 @@ def get_frame(job_id: str, frame_name: str):
 
 
 @app.post("/jobs/{job_id}/approve", status_code=202)
-async def approve_job(job_id: str):
+async def approve_job(
+    job_id: str,
+    material_prompt: Optional[str] = Form(None),
+    style_prompt: Optional[str] = Form(None),
+    studio_lighting: Optional[str] = Form(None),
+    dark_backdrop: Optional[str] = Form(None),
+    white_backdrop: Optional[str] = Form(None),
+    warm_tone: Optional[str] = Form(None),
+    cold_tone: Optional[str] = Form(None),
+    ground_shadow: Optional[str] = Form(None),
+):
     """Approve Phase 4 (Kling AI styling) for a job that is awaiting approval.
+
+    Optionally accepts updated style parameters that override the values
+    submitted at job creation time — the user can tweak materials and style
+    while reviewing the base video.
 
     Must be async so asyncio.Event.set() runs in the same event loop as
     the pipeline task that is awaiting the event.
@@ -250,7 +264,26 @@ async def approve_job(job_id: str):
             status_code=409,
             detail=f"Job is not awaiting approval (status: {job.status})",
         )
-    signalled = jobs.approve_phase4(job_id)
+
+    def _to_bool(val: Optional[str], default: bool) -> bool:
+        if val is None:
+            return default
+        return val.lower() in ("true", "1", "yes")
+
+    style_overrides = None
+    if material_prompt is not None:
+        style_overrides = {
+            "material_prompt": material_prompt or "",
+            "style_prompt": style_prompt or "",
+            "studio_lighting": _to_bool(studio_lighting, True),
+            "dark_backdrop": _to_bool(dark_backdrop, False),
+            "white_backdrop": _to_bool(white_backdrop, False),
+            "warm_tone": _to_bool(warm_tone, False),
+            "cold_tone": _to_bool(cold_tone, False),
+            "ground_shadow": _to_bool(ground_shadow, True),
+        }
+
+    signalled = jobs.approve_phase4(job_id, style_overrides=style_overrides)
     if not signalled:
         raise HTTPException(status_code=409, detail="Approval event already consumed")
     return {"ok": True}
@@ -369,6 +402,18 @@ async def _run_pipeline(
         # FAL credits.  The frontend calls POST /jobs/{id}/approve to continue.
         approval_event = jobs.mark_awaiting_approval(job_id)
         await approval_event.wait()
+
+        # Check for style overrides submitted at approval time
+        overrides = jobs.get_approval_style(job_id)
+        if overrides:
+            material_prompt = overrides["material_prompt"]
+            style_prompt = overrides["style_prompt"]
+            studio_lighting = overrides["studio_lighting"]
+            dark_backdrop = overrides["dark_backdrop"]
+            white_backdrop = overrides["white_backdrop"]
+            warm_tone = overrides["warm_tone"]
+            cold_tone = overrides["cold_tone"]
+            ground_shadow = overrides["ground_shadow"]
 
         fal_key = os.environ.get("FAL_KEY", "")
         if not fal_key:
