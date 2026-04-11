@@ -19,6 +19,7 @@ export interface StyleOptions {
   warmTone: boolean
   coldTone: boolean
   groundShadow: boolean
+  materialPrompt: string
   prompt: string
 }
 
@@ -29,8 +30,9 @@ function buildStylePrompt(opts: StyleOptions): string {
   if (opts.whiteBackdrop)  parts.push('clean white background')
   if (opts.warmTone)       parts.push('warm amber tone')
   if (opts.coldTone)       parts.push('cool blue-white tone')
-  if (opts.groundShadow)   parts.push('subtle ground plane shadow')
-  if (opts.prompt.trim())  parts.push(opts.prompt.trim())
+  if (opts.groundShadow)          parts.push('subtle ground plane shadow')
+  if (opts.materialPrompt.trim()) parts.push(opts.materialPrompt.trim())
+  if (opts.prompt.trim())         parts.push(opts.prompt.trim())
   return parts.join(', ')
 }
 
@@ -56,6 +58,7 @@ const DEFAULT_STYLE: StyleOptions = {
   warmTone: false,
   coldTone: false,
   groundShadow: true,
+  materialPrompt: '',
   prompt: '',
 }
 

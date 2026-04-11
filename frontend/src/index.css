@@ -426,6 +426,20 @@ textarea { font-family: inherit; }
   color: var(--text-1);
 }
 
+.prompt-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.prompt-section-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-2);
+}
+
 .style-prompt {
   width: 100%;
   background: transparent;

@@ -59,15 +59,31 @@ export function StylePanel({
         })}
       </div>
 
+      {/* Material description */}
+      <div className="prompt-section">
+        <span className="prompt-section-label">Materials</span>
+        <textarea
+          className="style-prompt"
+          rows={2}
+          placeholder="e.g. brushed aluminium body, matte black cap, frosted glass lens..."
+          value={options.materialPrompt}
+          onChange={(e) => onOptionsChange({ ...options, materialPrompt: e.target.value })}
+          disabled={disabled}
+        />
+      </div>
+
       {/* Style prompt */}
-      <textarea
-        className="style-prompt"
-        rows={2}
-        placeholder="Additional style notes... (materials, mood, lighting)"
-        value={options.prompt}
-        onChange={(e) => onOptionsChange({ ...options, prompt: e.target.value })}
-        disabled={disabled}
-      />
+      <div className="prompt-section">
+        <span className="prompt-section-label">Style notes</span>
+        <textarea
+          className="style-prompt"
+          rows={2}
+          placeholder="Additional style notes... (mood, lighting, colour)"
+          value={options.prompt}
+          onChange={(e) => onOptionsChange({ ...options, prompt: e.target.value })}
+          disabled={disabled}
+        />
+      </div>
 
       {/* Explosion level slider */}
       <div className="slider-row">
