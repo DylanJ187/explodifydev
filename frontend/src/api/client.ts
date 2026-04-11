@@ -36,7 +36,14 @@ export async function createJob(
   options: {
     previewId: string
     explodeScalar: number
+    materialPrompt: string
     stylePrompt: string
+    studioLighting: boolean
+    darkBackdrop: boolean
+    whiteBackdrop: boolean
+    warmTone: boolean
+    coldTone: boolean
+    groundShadow: boolean
     masterAngle: FaceName
     rotationOffsetDeg: number
     orbitRangeDeg: number
@@ -45,7 +52,14 @@ export async function createJob(
   const form = new FormData()
   form.append('preview_id', options.previewId)
   form.append('explode_scalar', String(options.explodeScalar))
+  form.append('material_prompt', options.materialPrompt)
   form.append('style_prompt', options.stylePrompt)
+  form.append('studio_lighting', String(options.studioLighting))
+  form.append('dark_backdrop', String(options.darkBackdrop))
+  form.append('white_backdrop', String(options.whiteBackdrop))
+  form.append('warm_tone', String(options.warmTone))
+  form.append('cold_tone', String(options.coldTone))
+  form.append('ground_shadow', String(options.groundShadow))
   form.append('master_angle', options.masterAngle)
   form.append('rotation_offset_deg', String(options.rotationOffsetDeg))
   form.append('orbit_range_deg', String(options.orbitRangeDeg))

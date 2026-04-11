@@ -23,18 +23,6 @@ export interface StyleOptions {
   prompt: string
 }
 
-function buildStylePrompt(opts: StyleOptions): string {
-  const parts: string[] = []
-  if (opts.studioLighting) parts.push('soft diffused studio lighting')
-  if (opts.darkBackdrop)   parts.push('dark background')
-  if (opts.whiteBackdrop)  parts.push('clean white background')
-  if (opts.warmTone)       parts.push('warm amber tone')
-  if (opts.coldTone)       parts.push('cool blue-white tone')
-  if (opts.groundShadow)          parts.push('subtle ground plane shadow')
-  if (opts.materialPrompt.trim()) parts.push(opts.materialPrompt.trim())
-  if (opts.prompt.trim())         parts.push(opts.prompt.trim())
-  return parts.join(', ')
-}
 
 
 const DEFAULT_STYLE: StyleOptions = {
@@ -99,7 +87,14 @@ export default function App() {
       const id = await createJob({
         previewId: preview.preview_id,
         explodeScalar,
-        stylePrompt: buildStylePrompt(styleOptions),
+        materialPrompt: styleOptions.materialPrompt,
+        stylePrompt: styleOptions.prompt,
+        studioLighting: styleOptions.studioLighting,
+        darkBackdrop: styleOptions.darkBackdrop,
+        whiteBackdrop: styleOptions.whiteBackdrop,
+        warmTone: styleOptions.warmTone,
+        coldTone: styleOptions.coldTone,
+        groundShadow: styleOptions.groundShadow,
         masterAngle: selectedFace,
         rotationOffsetDeg: rotationDeg,
         orbitRangeDeg,

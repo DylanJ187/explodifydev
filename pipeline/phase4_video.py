@@ -3,9 +3,12 @@
 
 Strategy: pyrender produces geometrically exact motion (72 frames, Phase 2+3).
 Kling o1 edit preserves that motion structure completely while applying
-studio-quality materials, lighting, and environment from the style prompt.
-This avoids the hallucination problem seen when Kling has to generate motion
-itself from sparse keyframes.
+studio-quality materials, lighting, and environment.
+
+The prompt is built upstream by pipeline.prompt_interpreter, which fills a
+structured template from the user's material description, style toggles, and
+free-text notes.  This module receives the final prompt string and handles
+only the FAL API interaction (upload, submit, download).
 
 Endpoint: fal-ai/kling-video/o1/standard/video-to-video/edit
   - Transforms style/setting/lighting while retaining original motion.
@@ -19,25 +22,6 @@ import fal_client
 import httpx
 
 FAL_KLING_EDIT = "fal-ai/kling-video/o1/standard/video-to-video/edit"
-
-_BASE_PROMPT = (
-    "Photorealistic product photography render. "
-    "Preserve all component motion, positions, and camera movement exactly. "
-    "Apply high-quality physical materials with accurate reflections and specularity. "
-    "Professional studio lighting setup. Sharp focus across all components. "
-)
-
-_DEFAULT_STYLE = (
-    "Clean dark studio backdrop with subtle ground plane reflection. "
-    "Soft key light from upper-left, cool fill from right. "
-    "Each component rendered as machined aluminum or anodized metal. "
-)
-
-
-def _build_edit_prompt(style_prompt: str) -> str:
-    """Combine the motion-preservation base with the user's aesthetic."""
-    aesthetic = style_prompt.strip() if style_prompt.strip() else _DEFAULT_STYLE
-    return _BASE_PROMPT + aesthetic
 
 
 class KlingVideoEditor:
@@ -55,15 +39,15 @@ class KlingVideoEditor:
     async def edit(
         self,
         video_path: Path,
-        style_prompt: str,
+        prompt: str,
         output_path: Path,
     ) -> Path:
         """Upload raw video, apply Kling o1 style edit, write result.
 
         Args:
-            video_path:   Path to the mp4 assembled in Phase 3.
-            style_prompt: User-supplied aesthetic (lighting, materials, etc.).
-            output_path:  Destination for the styled mp4.
+            video_path:  Path to the mp4 assembled in Phase 3.
+            prompt:      Fully assembled prompt from prompt_interpreter.
+            output_path: Destination for the styled mp4.
 
         Returns:
             output_path after writing.
@@ -76,11 +60,10 @@ class KlingVideoEditor:
         video_url = await asyncio.to_thread(
             fal_client.upload_file, str(video_path)
         )
-        print(f"[Phase 4] Uploaded → {video_url}")
+        print(f"[Phase 4] Uploaded -> {video_url}")
 
-        prompt = _build_edit_prompt(style_prompt)
-        print(f"[Phase 4] Submitting Kling o1 edit...")
-        print(f"[Phase 4] Prompt: {prompt[:120]}...")
+        print("[Phase 4] Submitting Kling o1 edit...")
+        print(f"[Phase 4] Prompt: {prompt[:200]}...")
 
         # Blocking fal_client.subscribe call, run off the event loop
         result = await asyncio.to_thread(
