@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 import backend.jobs as jobs
 from backend.models import JobStatus
@@ -183,9 +183,24 @@ def approve_job(job_id: str):
     return {"ok": True}
 
 
+@app.get("/jobs/{job_id}/base_video")
+def get_base_video(job_id: str, request: Request):
+    """Serve the raw 72-frame assembled mp4 (no AI styling). Available once Phase 3 is done."""
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    from backend.models import PhaseStatus
+    if job.phases.get(3) != PhaseStatus.done:
+        raise HTTPException(status_code=425, detail="Base video not ready yet")
+    video_path = UPLOAD_DIR / job_id / "base_video.mp4"
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Base video file not found")
+    return _range_video_response(request, video_path)
+
+
 @app.get("/jobs/{job_id}/video")
-def get_video(job_id: str):
-    """Serve the assembled mp4.  Returns base video while awaiting approval or done."""
+def get_video(job_id: str, request: Request):
+    """Serve the final styled mp4 (Phase 4), falling back to base_video if not yet styled."""
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -193,11 +208,64 @@ def get_video(job_id: str):
         raise HTTPException(status_code=425, detail="Video not ready yet")
     video_path = UPLOAD_DIR / job_id / "final_video.mp4"
     if not video_path.exists():
-        # Fall back to the raw assembled video if phase 4 wasn't run
         video_path = UPLOAD_DIR / job_id / "base_video.mp4"
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
-    return FileResponse(str(video_path), media_type="video/mp4")
+    return _range_video_response(request, video_path)
+
+
+def _range_video_response(request: Request, video_path: Path):
+    """Return a StreamingResponse that honours HTTP Range requests for video scrubbing."""
+    file_size = video_path.stat().st_size
+    range_header = request.headers.get("range")
+
+    if range_header:
+        range_value = range_header.strip().replace("bytes=", "")
+        start_str, end_str = range_value.split("-")
+        start = int(start_str)
+        end = int(end_str) if end_str else file_size - 1
+        end = min(end, file_size - 1)
+        chunk_size = end - start + 1
+
+        def iter_chunk():
+            with open(video_path, "rb") as f:
+                f.seek(start)
+                remaining = chunk_size
+                while remaining > 0:
+                    data = f.read(min(65536, remaining))
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        return StreamingResponse(
+            iter_chunk(),
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(chunk_size),
+            },
+        )
+
+    def iter_full():
+        with open(video_path, "rb") as f:
+            while True:
+                data = f.read(65536)
+                if not data:
+                    break
+                yield data
+
+    return StreamingResponse(
+        iter_full(),
+        status_code=200,
+        media_type="video/mp4",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+        },
+    )
 
 
 async def _run_pipeline(

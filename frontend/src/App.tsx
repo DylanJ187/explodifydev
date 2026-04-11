@@ -310,7 +310,7 @@ export default function App() {
         {state === 'done' && jobId && (
           <div className="output-stack animate-fade-in">
             <FramesOutput jobId={jobId} />
-            <VideoOutput jobId={jobId} />
+            <VideoOutput jobId={jobId} showBase />
           </div>
         )}
 
@@ -337,10 +337,10 @@ function ApprovalGate({
   return (
     <div className="approval-gate">
       <div className="approval-preview">
-        <div className="approval-preview-label">Base video (72-frame render)</div>
+        <div className="approval-preview-label">Base video — 72-frame pyrender (no AI styling)</div>
         <div className="video-player-wrap">
           <video
-            src={`/jobs/${jobId}/video`}
+            src={`/jobs/${jobId}/base_video`}
             controls
             autoPlay
             loop

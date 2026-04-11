@@ -1379,7 +1379,13 @@ input[type='range']::-moz-range-thumb {
   padding: 32px 48px 48px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 40px;
+}
+
+.video-block {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .video-output-header {
