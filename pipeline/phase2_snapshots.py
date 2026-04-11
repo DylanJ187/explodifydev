@@ -38,6 +38,7 @@ class SnapshotRenderer:
         scalar: float,
         source_format: str = "",
         orbit_range_deg: float = DEFAULT_ORBIT_RANGE_DEG,
+        rotation_offset_deg: float = 0.0,
     ) -> FrameSet:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -54,7 +55,9 @@ class SnapshotRenderer:
             EXPLOSION_FRACTIONS, camera_angles, FRAME_NAMES
         ):
             exploded = self._apply_explosion(meshes, explosion_vectors, fraction)
-            img = self._render_scene(exploded, cam_dir, orbit_deg)
+            img = self._render_scene(
+                exploded, cam_dir, orbit_deg, up_rotation_deg=rotation_offset_deg,
+            )
             out_path = output_dir / f"{name}.png"
             img.save(str(out_path))
             frame_paths.append(out_path)

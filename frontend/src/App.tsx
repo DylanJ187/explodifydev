@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { UploadZone } from './components/UploadZone'
 import { OrientationPicker } from './components/OrientationPicker'
 import { StylePanel } from './components/StylePanel'
@@ -50,6 +50,7 @@ export default function App() {
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
   const [preview, setPreview] = useState<PreviewResult | null>(null)
   const [selectedFace, setSelectedFace] = useState<FaceName>('front')
+  const [rotationDeg, setRotationDeg] = useState(0)
   const [orbitRangeDeg, setOrbitRangeDeg] = useState(40)
   const [explodeScalar, setExplodeScalar] = useState(1.5)
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE)
@@ -96,6 +97,7 @@ export default function App() {
         explodeScalar,
         stylePrompt: buildStylePrompt(styleOptions),
         masterAngle: selectedFace,
+        rotationOffsetDeg: rotationDeg,
         orbitRangeDeg,
       })
       setJobId(id)
@@ -135,6 +137,7 @@ export default function App() {
     setJobStatus(null)
     setPreview(null)
     setSelectedFace('front')
+    setRotationDeg(0)
     setOrbitRangeDeg(40)
     setExplodeScalar(1.5)
     setStyleOptions(DEFAULT_STYLE)
@@ -246,7 +249,9 @@ export default function App() {
             imageSrc={preview.images[selectedFace]}
             faceName={selectedFace}
             selectedFace={selectedFace}
-            onFaceChange={setSelectedFace}
+            onFaceChange={(face) => { setSelectedFace(face); setRotationDeg(0) }}
+            rotationDeg={rotationDeg}
+            onRotate={() => setRotationDeg(prev => (prev + 90) % 360)}
           />
         )}
 
@@ -277,21 +282,16 @@ function OrientationPreview({
   faceName,
   selectedFace,
   onFaceChange,
+  rotationDeg,
+  onRotate,
 }: {
   imageSrc: string
   faceName: string
   selectedFace: FaceName
   onFaceChange: (face: FaceName) => void
+  rotationDeg: number
+  onRotate: () => void
 }) {
-  const [rotation, setRotation] = useState(0)
-
-  const rotate = useCallback(() => {
-    setRotation(prev => (prev + 90) % 360)
-  }, [])
-
-  // Reset rotation when face changes
-  useEffect(() => { setRotation(0) }, [selectedFace])
-
   return (
     <div className="orient-preview-panel animate-fade-in">
       <div className="orient-preview-label">{faceName} view</div>
@@ -300,7 +300,7 @@ function OrientationPreview({
           src={imageSrc}
           alt={`${faceName} orientation preview`}
           className="orient-preview-img"
-          style={{ transform: `rotate(${rotation}deg)` }}
+          style={{ transform: `rotate(${rotationDeg}deg)` }}
           draggable={false}
         />
       </div>
@@ -311,9 +311,9 @@ function OrientationPreview({
           onFaceChange={onFaceChange}
         />
 
-        <button className="rotate-btn" onClick={rotate}>
+        <button className="rotate-btn" onClick={onRotate}>
           ↻ Rotate
-          {rotation !== 0 && <span className="rotate-badge">{rotation}°</span>}
+          {rotationDeg !== 0 && <span className="rotate-badge">{rotationDeg}°</span>}
         </button>
       </div>
     </div>
