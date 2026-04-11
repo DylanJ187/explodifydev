@@ -15,8 +15,6 @@ export interface JobStatus {
 
 export type FaceName =
   | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
-  | 'front-left' | 'front-right' | 'top-front' | 'top-back'
-  | 'top-left' | 'top-right' | 'bottom-front' | 'bottom-back'
 
 export interface PreviewResult {
   preview_id: string

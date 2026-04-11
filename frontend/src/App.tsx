@@ -36,20 +36,6 @@ function buildStylePrompt(opts: StyleOptions): string {
   return parts.join(', ')
 }
 
-const CARDINAL_FALLBACK: Record<string, 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'> = {
-  'front-left':   'front',
-  'front-right':  'front',
-  'top-front':    'top',
-  'top-back':     'top',
-  'top-left':     'top',
-  'top-right':    'top',
-  'bottom-front': 'bottom',
-  'bottom-back':  'bottom',
-}
-
-function nearestCardinal(face: FaceName): 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' {
-  return CARDINAL_FALLBACK[face] ?? (face as 'front')
-}
 
 const DEFAULT_STYLE: StyleOptions = {
   studioLighting: true,
@@ -264,7 +250,7 @@ export default function App() {
 
         {state === 'orientation' && preview && (
           <OrientationPreview
-            imageSrc={preview.images[selectedFace] ?? preview.images[nearestCardinal(selectedFace)]}
+            imageSrc={preview.images[selectedFace]}
             faceName={selectedFace}
             selectedFace={selectedFace}
             onFaceChange={(face) => { setSelectedFace(face); setRotationDeg(0) }}

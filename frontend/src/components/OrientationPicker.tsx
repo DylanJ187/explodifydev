@@ -7,14 +7,6 @@ interface Props {
   disabled?: boolean
 }
 
-// Grid layout (5 cols x 5 rows):
-//
-//              [top-left]  [top]      [top-right]
-//  [back] [left] [front-left] [front] [front-right] [right]
-//              [bot-front] [bottom]   [bot-back]
-//
-// Simplified to a practical 5x3 grid with diagonals at corners:
-
 interface FaceEntry {
   name: FaceName
   label: string
@@ -22,35 +14,23 @@ interface FaceEntry {
 }
 
 const FACES: FaceEntry[] = [
-  // Top row
-  { name: 'top-left',     label: 'TL',     gridArea: 'tl' },
-  { name: 'top',          label: 'Top',    gridArea: 'top' },
-  { name: 'top-right',    label: 'TR',     gridArea: 'tr' },
-  // Middle row
-  { name: 'left',         label: 'Left',   gridArea: 'left' },
-  { name: 'front-left',   label: 'FL',     gridArea: 'fl' },
-  { name: 'front',        label: 'Front',  gridArea: 'front' },
-  { name: 'front-right',  label: 'FR',     gridArea: 'fr' },
-  { name: 'right',        label: 'Right',  gridArea: 'right' },
-  // Bottom row
-  { name: 'top-front',    label: 'TF',     gridArea: 'tf' },
-  { name: 'bottom',       label: 'Bot',    gridArea: 'bottom' },
-  { name: 'top-back',     label: 'TB',     gridArea: 'tb' },
-  // Extra row
-  { name: 'bottom-front', label: 'BF',     gridArea: 'bf' },
-  { name: 'back',         label: 'Back',   gridArea: 'back' },
-  { name: 'bottom-back',  label: 'BB',     gridArea: 'bb' },
+  { name: 'top',    label: 'Top',    gridArea: 'top' },
+  { name: 'left',   label: 'Left',   gridArea: 'left' },
+  { name: 'front',  label: 'Front',  gridArea: 'front' },
+  { name: 'right',  label: 'Right',  gridArea: 'right' },
+  { name: 'bottom', label: 'Bottom', gridArea: 'bottom' },
+  { name: 'back',   label: 'Back',   gridArea: 'back' },
 ]
 
 const GRID_STYLE: React.CSSProperties = {
   display: 'grid',
   gridTemplateAreas: `
-    ".    tl    top   tr   ."
-    "left fl    front fr   right"
-    ".    tf    bottom tb  ."
-    ".    bf    back  bb   ."
+    ".    top    ."
+    "left front  right"
+    ".    bottom ."
+    ".    back   ."
   `,
-  gridTemplateColumns: 'repeat(5, 1fr)',
+  gridTemplateColumns: 'repeat(3, 1fr)',
   gridTemplateRows: 'repeat(4, 28px)',
   gap: '2px',
 }
@@ -61,7 +41,6 @@ export function OrientationPicker({ selectedFace, onFaceChange, disabled }: Prop
       <div style={GRID_STYLE}>
         {FACES.map(({ name, label, gridArea }) => {
           const isSelected = selectedFace === name
-          const isDiagonal = label.length <= 2
           return (
             <button
               key={name}
@@ -71,7 +50,6 @@ export function OrientationPicker({ selectedFace, onFaceChange, disabled }: Prop
               className={[
                 'cube-face-btn',
                 isSelected ? 'cube-face-btn--selected' : '',
-                isDiagonal ? 'cube-face-btn--diag' : '',
               ].filter(Boolean).join(' ')}
               title={name}
             >

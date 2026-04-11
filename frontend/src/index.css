@@ -324,15 +324,6 @@ textarea { font-family: inherit; }
   color: #000 !important;
 }
 
-.cube-face-btn--diag {
-  font-size: 6px;
-  letter-spacing: 0.08em;
-  opacity: 0.6;
-}
-
-.cube-face-btn--diag.cube-face-btn--selected {
-  opacity: 1;
-}
 
 .cube-face-btn:disabled {
   opacity: 0.4;
