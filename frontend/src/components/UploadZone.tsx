@@ -3,69 +3,99 @@ import { useState } from 'react'
 import type { DragEvent, ChangeEvent } from 'react'
 
 interface Props {
-  onUpload: (file: File, scalar: number) => void
-  disabled?: boolean
+  onUpload: (file: File) => void
+  onLoadSample: () => void
+  loading?: boolean
 }
 
-export function UploadZone({ onUpload, disabled }: Props) {
+const FORMATS = [
+  { ext: '.obj', note: 'recommended' },
+  { ext: '.glb', note: null },
+  { ext: '.stl', note: null },
+  { ext: '.step', note: 'STP' },
+] as const
+
+export function UploadZone({ onUpload, onLoadSample, loading }: Props) {
   const [dragging, setDragging] = useState(false)
-  const [scalar, setScalar] = useState(1.5)
 
   function handleDrop(e: DragEvent<HTMLDivElement>) {
     e.preventDefault()
     setDragging(false)
     const file = e.dataTransfer.files[0]
-    if (file) onUpload(file, scalar)
+    if (file && !loading) onUpload(file)
   }
 
   function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    if (file) onUpload(file, scalar)
+    if (file) onUpload(file)
+    e.target.value = ''
   }
 
+  const zoneClass = [
+    'upload-zone',
+    dragging ? 'upload-zone--drag' : '',
+    loading ? 'upload-zone--loading' : '',
+  ].filter(Boolean).join(' ')
+
   return (
-    <div className="flex flex-col items-center gap-6 w-full max-w-xl">
+    <div className="upload-zone-wrapper">
       <div
-        onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+        className={zoneClass}
+        onDragOver={(e) => { e.preventDefault(); if (!loading) setDragging(true) }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
-        className={`
-          w-full rounded-2xl border-2 border-dashed p-12
-          flex flex-col items-center justify-center gap-3 cursor-pointer
-          transition-colors
-          ${dragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-gray-50'}
-          ${disabled ? 'opacity-50 pointer-events-none' : 'hover:border-blue-400'}
-        `}
-        onClick={() => document.getElementById('file-input')?.click()}
+        onClick={() => !loading && document.getElementById('cad-file-input')?.click()}
       >
-        <svg className="w-12 h-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
-        </svg>
-        <p className="text-gray-600 font-medium">Drop your CAD file here</p>
-        <p className="text-gray-400 text-sm">.glb · .obj · .stl</p>
+        {loading ? (
+          <div className="upload-loading-inner">
+            <div className="sweep-bar" />
+            <span>Reading geometry...</span>
+          </div>
+        ) : (
+          <>
+            <div className="upload-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="1.5"
+                strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+            <p className="upload-cta">
+              {dragging ? 'Release to load' : 'Drop CAD file here'}
+            </p>
+            <p className="upload-sub">or click to browse</p>
+          </>
+        )}
         <input
-          id="file-input"
+          id="cad-file-input"
           type="file"
-          accept=".glb,.obj,.stl"
-          className="hidden"
+          accept=".obj,.glb,.stl,.step,.stp"
+          style={{ display: 'none' }}
           onChange={handleFileChange}
-          disabled={disabled}
+          disabled={loading}
         />
       </div>
 
-      <div className="flex items-center gap-3 w-full">
-        <label className="text-sm text-gray-600 whitespace-nowrap">
-          Explosion strength: <span className="font-semibold">{scalar.toFixed(1)}×</span>
-        </label>
-        <input
-          type="range" min={0.5} max={3.0} step={0.1}
-          value={scalar}
-          onChange={(e) => setScalar(parseFloat(e.target.value))}
-          className="flex-1"
-          disabled={disabled}
-        />
+      <div className="format-list">
+        {FORMATS.map(({ ext, note }) => (
+          <span key={ext} className="format-tag">
+            {ext}
+            {note && <span className="format-note">{note}</span>}
+          </span>
+        ))}
       </div>
+
+      <div className="upload-divider"><span>or</span></div>
+
+      <button
+        className="sample-btn"
+        onClick={onLoadSample}
+        disabled={loading}
+      >
+        Load sample assembly
+      </button>
     </div>
   )
 }

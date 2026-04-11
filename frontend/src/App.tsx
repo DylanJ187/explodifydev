@@ -1,56 +1,68 @@
 // frontend/src/App.tsx
 import { useState, useEffect, useRef } from 'react'
 import { UploadZone } from './components/UploadZone'
-import { PromptInput } from './components/PromptInput'
-import { PipelineProgress } from './components/PipelineProgress'
 import { OrientationPicker } from './components/OrientationPicker'
-import { FramesPreview } from './components/FramesPreview'
+import { StylePanel } from './components/StylePanel'
+import { IdleOutput } from './components/IdleOutput'
+import { LoadingOutput } from './components/LoadingOutput'
+import { FramesOutput } from './components/FramesOutput'
+import { VideoPlaceholder } from './components/VideoPlaceholder'
 import { getPreviewImages, createJob, getJobStatus } from './api/client'
 import type { JobStatus, FaceName, PreviewResult } from './api/client'
 
-type AppState =
-  | 'idle'
-  | 'uploading'       // waiting for /preview response
-  | 'orientation'     // showing 6-face picker
-  | 'processing'      // pipeline running
-  | 'done'
-  | 'error'
+type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'done' | 'error'
+
+export interface StyleOptions {
+  studioLighting: boolean
+  darkBackdrop: boolean
+  whiteBackdrop: boolean
+  warmTone: boolean
+  coldTone: boolean
+  groundShadow: boolean
+  prompt: string
+}
+
+function buildStylePrompt(opts: StyleOptions): string {
+  const parts: string[] = []
+  if (opts.studioLighting) parts.push('soft diffused studio lighting')
+  if (opts.darkBackdrop)   parts.push('dark background')
+  if (opts.whiteBackdrop)  parts.push('clean white background')
+  if (opts.warmTone)       parts.push('warm amber tone')
+  if (opts.coldTone)       parts.push('cool blue-white tone')
+  if (opts.groundShadow)   parts.push('subtle ground plane shadow')
+  if (opts.prompt.trim())  parts.push(opts.prompt.trim())
+  return parts.join(', ')
+}
+
+const DEFAULT_STYLE: StyleOptions = {
+  studioLighting: true,
+  darkBackdrop: false,
+  whiteBackdrop: false,
+  warmTone: false,
+  coldTone: false,
+  groundShadow: true,
+  prompt: '',
+}
 
 export default function App() {
-  const [state, setState] = useState<AppState>('uploading')  // start loading sample
+  const [state, setState] = useState<AppState>('idle')
   const [jobId, setJobId] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
-  const [stylePrompt, setStylePrompt] = useState('')
-  const [scalar, setScalar] = useState(1.5)
   const [preview, setPreview] = useState<PreviewResult | null>(null)
+  const [selectedFace, setSelectedFace] = useState<FaceName>('front')
+  const [rotationDeg, setRotationDeg] = useState(0)
+  const [explodeScalar, setExplodeScalar] = useState(1.5)
+  const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Auto-load sample on mount
-  useEffect(() => {
-    async function loadSample() {
-      try {
-        const resp = await fetch('/preview/sample')
-        if (!resp.ok) throw new Error(`Sample preview failed: ${resp.statusText}`)
-        const result: PreviewResult = await resp.json()
-        setPreview(result)
-        setState('orientation')
-      } catch (err) {
-        setErrorMsg(err instanceof Error ? err.message : 'Failed to load sample')
-        setState('error')
-      }
-    }
-    loadSample()
-  }, [])
-
-  // Step 1: upload file → fetch 6 orientation previews
-  async function handleUpload(file: File, uploadedScalar: number) {
-    setScalar(uploadedScalar)
+  async function handleUpload(file: File) {
     setErrorMsg(null)
     try {
       setState('uploading')
       const result = await getPreviewImages(file)
       setPreview(result)
+      setSelectedFace('front')
       setState('orientation')
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Preview failed')
@@ -58,26 +70,42 @@ export default function App() {
     }
   }
 
-  // Step 2: user confirms orientation → create job
-  async function handleOrientationConfirm(face: FaceName, rotationDeg: number) {
-    if (!preview) return
+  async function handleLoadSample() {
+    setErrorMsg(null)
     try {
+      setState('uploading')
+      const resp = await fetch('/preview/sample')
+      if (!resp.ok) throw new Error(`Sample load failed: ${resp.statusText}`)
+      const result: PreviewResult = await resp.json()
+      setPreview(result)
+      setSelectedFace('front')
+      setState('orientation')
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Sample load failed')
+      setState('error')
+    }
+  }
+
+  async function handleGenerate() {
+    if (!preview) return
+    setErrorMsg(null)
+    try {
+      setState('processing')
       const id = await createJob({
         previewId: preview.preview_id,
-        explodeScalar: scalar,
-        stylePrompt,
-        masterAngle: face,
+        explodeScalar,
+        stylePrompt: buildStylePrompt(styleOptions),
+        masterAngle: selectedFace,
         rotationOffsetDeg: rotationDeg,
       })
       setJobId(id)
-      setState('processing')
+      setJobStatus(null)
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Job creation failed')
       setState('error')
     }
   }
 
-  // Poll job status while processing
   useEffect(() => {
     if (state !== 'processing' || !jobId) return
 
@@ -106,88 +134,176 @@ export default function App() {
     setJobId(null)
     setJobStatus(null)
     setPreview(null)
-    setStylePrompt('')
-    setScalar(1.5)
+    setSelectedFace('front')
+    setRotationDeg(0)
+    setExplodeScalar(1.5)
+    setStyleOptions(DEFAULT_STYLE)
     setErrorMsg(null)
   }
 
+  const showControls = state === 'orientation' || state === 'processing' || state === 'done'
+  const controlsDisabled = state !== 'orientation'
+
   return (
-    <div className="min-h-screen bg-white flex flex-col items-center justify-start px-4 py-16 gap-10">
-      <header className="text-center">
-        <h1 className="text-4xl font-bold tracking-tight text-gray-900">Explodify</h1>
-        <p className="text-gray-500 mt-2">CAD file → studio-grade exploded-view animation</p>
-      </header>
+    <div className="app-layout">
 
-      {/* Loading state (sample auto-load or user upload) */}
-      {state === 'uploading' && (
-        <p className="text-sm text-gray-500 animate-pulse">
-          Rendering 6 orientation views…
-        </p>
-      )}
+      {/* ─── Left panel ─── */}
+      <aside className="left-panel">
+        <header className="brand-header">
+          <span className="wordmark">EXPLOD<em>I</em>FY</span>
+          <span className="tagline">CAD → Exploded View</span>
+        </header>
 
-      {/* Upload your own (shown only when explicitly idle after reset) */}
-      {state === 'idle' && (
-        <>
-          <PromptInput
-            value={stylePrompt}
-            onChange={setStylePrompt}
-            disabled={false}
-          />
-          <UploadZone onUpload={handleUpload} disabled={false} />
-        </>
-      )}
+        <div className="left-scroll">
 
-      {/* Step 2: Orientation selection */}
-      {state === 'orientation' && preview && (
-        <>
-          <OrientationPicker
-            images={preview.images}
-            onConfirm={handleOrientationConfirm}
-          />
-          <button
-            onClick={() => setState('idle')}
-            className="text-xs text-gray-400 hover:text-gray-600 underline -mt-4"
-          >
-            Upload your own file instead
-          </button>
-        </>
-      )}
+          {(state === 'idle' || state === 'uploading') && (
+            <section className="panel-section animate-fade-in">
+              <div className="section-label">Input File</div>
+              <UploadZone
+                onUpload={handleUpload}
+                onLoadSample={handleLoadSample}
+                loading={state === 'uploading'}
+              />
+            </section>
+          )}
 
-      {/* Step 3: Pipeline progress */}
-      {state === 'processing' && jobStatus && (
-        <PipelineProgress job={jobStatus} />
-      )}
-      {state === 'processing' && !jobStatus && (
-        <p className="text-sm text-gray-500 animate-pulse">Starting pipeline...</p>
-      )}
+          {showControls && (
+            <>
+              <section className="panel-section animate-fade-in" style={{ paddingBottom: 14 }}>
+                <button className="reupload-btn" onClick={reset}>
+                  ↑&nbsp;&nbsp;Upload different file
+                </button>
+              </section>
 
-      {/* Step 4: Done */}
-      {state === 'done' && jobId && (
-        <>
-          <FramesPreview jobId={jobId} />
-          <button
-            onClick={reset}
-            className="text-sm text-gray-400 hover:text-gray-600 underline"
-          >
-            Try another orientation
-          </button>
-        </>
-      )}
+              <section className="panel-section animate-fade-in">
+                <div className="section-label">Orientation</div>
+                <OrientationPicker
+                  selectedFace={selectedFace}
+                  onFaceChange={setSelectedFace}
+                  disabled={controlsDisabled}
+                />
+              </section>
 
-      {/* Error */}
-      {state === 'error' && (
-        <div className="flex flex-col items-center gap-4 max-w-md text-center">
-          <p className="text-red-600 text-sm font-medium">
-            {errorMsg ?? 'Something went wrong'}
-          </p>
-          <button
-            onClick={reset}
-            className="text-sm text-gray-500 hover:text-gray-800 underline"
-          >
-            Try again
-          </button>
+              <section className="panel-section animate-fade-in">
+                <div className="section-label">Style &amp; Parameters</div>
+                <StylePanel
+                  options={styleOptions}
+                  onOptionsChange={setStyleOptions}
+                  explodeScalar={explodeScalar}
+                  onExplodeChange={setExplodeScalar}
+                  rotationDeg={rotationDeg}
+                  onRotationChange={setRotationDeg}
+                  disabled={controlsDisabled}
+                />
+              </section>
+
+              {state === 'orientation' && (
+                <section className="panel-section animate-fade-in">
+                  <button className="generate-btn" onClick={handleGenerate}>
+                    Generate Explosion
+                    <span className="generate-arrow">→</span>
+                  </button>
+                </section>
+              )}
+
+              {state === 'processing' && (
+                <section className="panel-section animate-fade-in">
+                  <div className="processing-indicator">
+                    <div className="processing-dot" />
+                    Pipeline running...
+                  </div>
+                </section>
+              )}
+
+              {state === 'done' && (
+                <section className="panel-section animate-fade-in">
+                  <div className="done-indicator">
+                    <span>✓</span>
+                    Keyframes ready
+                  </div>
+                  <button className="reupload-btn" onClick={reset}>
+                    ↺&nbsp;&nbsp;Start over with new file
+                  </button>
+                </section>
+              )}
+            </>
+          )}
+
+          {state === 'error' && (
+            <section className="panel-section animate-fade-in">
+              <div className="error-box">
+                <span className="error-label">Error</span>
+                <p className="error-msg">{errorMsg ?? 'Something went wrong'}</p>
+                <button className="error-retry" onClick={reset}>Try again</button>
+              </div>
+            </section>
+          )}
+
         </div>
-      )}
+      </aside>
+
+      {/* ─── Right panel ─── */}
+      <main className="right-panel">
+        {state === 'idle' && <IdleOutput />}
+
+        {state === 'uploading' && (
+          <LoadingOutput phase="orientation" jobStatus={null} />
+        )}
+
+        {state === 'orientation' && preview && (
+          <OrientationPreview
+            imageSrc={preview.images[selectedFace]}
+            faceName={selectedFace}
+            rotationDeg={rotationDeg}
+          />
+        )}
+
+        {state === 'processing' && (
+          <LoadingOutput phase="pipeline" jobStatus={jobStatus} />
+        )}
+
+        {state === 'done' && jobId && (
+          <div className="output-stack animate-fade-in">
+            <FramesOutput jobId={jobId} />
+            <VideoPlaceholder />
+          </div>
+        )}
+
+        {state === 'error' && (
+          <div className="output-error-panel animate-fade-in">
+            No output — see error on left
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+/* Small inline component — not worth its own file */
+function OrientationPreview({
+  imageSrc,
+  faceName,
+  rotationDeg,
+}: {
+  imageSrc: string
+  faceName: string
+  rotationDeg: number
+}) {
+  return (
+    <div className="orient-preview-panel animate-fade-in">
+      <div className="orient-preview-label">{faceName} view</div>
+      <div className="orient-preview-frame">
+        <img
+          src={imageSrc}
+          alt={`${faceName} orientation preview`}
+          className="orient-preview-img"
+          style={{ transform: `rotate(${rotationDeg}deg)` }}
+          draggable={false}
+        />
+      </div>
+      <p className="orient-preview-hint">
+        Select a face on the left · Use rotation slider to correct alignment
+      </p>
     </div>
   )
 }
