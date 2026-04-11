@@ -12,15 +12,15 @@ from pipeline.models import NamedMesh
 
 PREVIEW_RESOLUTION = (512, 384)
 
-# Camera position direction for each cubic face.
-# These are exact axis-aligned vectors; the renderer adds slight y-offset for top/bottom.
+# Camera directions must match _ANGLE_TO_CAM_DIR in phase2_snapshots.py exactly,
+# otherwise the orientation preview shows a different angle than the final render.
 _FACE_CAM_DIRS: Dict[str, np.ndarray] = {
-    "front":  np.array([ 0.0,  0.15,  1.0]),
-    "back":   np.array([ 0.0,  0.15, -1.0]),
-    "left":   np.array([-1.0,  0.15,  0.0]),
-    "right":  np.array([ 1.0,  0.15,  0.0]),
-    "top":    np.array([ 0.0,  1.0,   0.1]),
-    "bottom": np.array([ 0.0, -1.0,   0.1]),
+    "front":  np.array([ 0.3,  0.3,  1.0]),
+    "back":   np.array([ 0.3,  0.3, -1.0]),
+    "left":   np.array([-1.0,  0.3,  0.3]),
+    "right":  np.array([ 1.0,  0.3,  0.3]),
+    "top":    np.array([ 0.0,  1.0,  0.3]),
+    "bottom": np.array([ 0.0, -1.0,  0.3]),
 }
 
 FACE_ORDER = ["front", "back", "left", "right", "top", "bottom"]
