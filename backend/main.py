@@ -106,7 +106,14 @@ async def create_job(
     file: Optional[UploadFile] = File(None),
     preview_id: Optional[str] = Form(None),
     explode_scalar: float = Form(1.5),
+    material_prompt: str = Form(""),
     style_prompt: str = Form(""),
+    studio_lighting: bool = Form(True),
+    dark_backdrop: bool = Form(False),
+    white_backdrop: bool = Form(False),
+    warm_tone: bool = Form(False),
+    cold_tone: bool = Form(False),
+    ground_shadow: bool = Form(True),
     master_angle: str = Form("front"),
     rotation_offset_deg: float = Form(0.0),
     orbit_range_deg: float = Form(40.0),
@@ -135,7 +142,20 @@ async def create_job(
     job_id = jobs.create_job()
 
     asyncio.create_task(
-        _run_pipeline(job_id, cad_path, explode_scalar, style_prompt, master_angle, rotation_offset_deg, orbit_range_deg)
+        _run_pipeline(
+            job_id, cad_path, explode_scalar,
+            material_prompt=material_prompt,
+            style_prompt=style_prompt,
+            studio_lighting=studio_lighting,
+            dark_backdrop=dark_backdrop,
+            white_backdrop=white_backdrop,
+            warm_tone=warm_tone,
+            cold_tone=cold_tone,
+            ground_shadow=ground_shadow,
+            master_angle=master_angle,
+            rotation_offset_deg=rotation_offset_deg,
+            orbit_range_deg=orbit_range_deg,
+        )
     )
 
     return {"job_id": job_id}
@@ -272,7 +292,14 @@ async def _run_pipeline(
     job_id: str,
     cad_path: Path,
     scalar: float,
+    material_prompt: str = "",
     style_prompt: str = "",
+    studio_lighting: bool = True,
+    dark_backdrop: bool = False,
+    white_backdrop: bool = False,
+    warm_tone: bool = False,
+    cold_tone: bool = False,
+    ground_shadow: bool = True,
     master_angle: str = "front",
     rotation_offset_deg: float = 0.0,
     orbit_range_deg: float = 40.0,
@@ -353,11 +380,25 @@ async def _run_pipeline(
             return
 
         jobs.update_phase(job_id, 4, "running")
+        from pipeline.prompt_interpreter import (
+            build_fal_prompt, resolve_backdrop_key, resolve_lighting_key,
+        )
         from pipeline.phase4_video import KlingVideoEditor
+
+        component_names = [nm.name for nm in meshes]
+        fal_prompt = build_fal_prompt(
+            material_prompt=material_prompt,
+            style_prompt=style_prompt,
+            lighting=resolve_lighting_key(studio_lighting, warm_tone, cold_tone),
+            backdrop=resolve_backdrop_key(dark_backdrop, white_backdrop),
+            ground_shadow=ground_shadow,
+            component_names=component_names,
+        )
+
         editor = KlingVideoEditor(fal_key=fal_key)
         await editor.edit(
             base_video,
-            style_prompt,
+            fal_prompt,
             output_dir / "final_video.mp4",
         )
         jobs.update_phase(job_id, 4, "done")

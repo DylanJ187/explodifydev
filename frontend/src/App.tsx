@@ -297,10 +297,7 @@ export default function App() {
         )}
 
         {state === 'awaiting_approval' && jobId && (
-          <div className="output-stack animate-fade-in">
-            <FramesOutput jobId={jobId} />
-            <ApprovalGate jobId={jobId} onApprove={handleApprove} onSkip={reset} />
-          </div>
+          <ApprovalGate jobId={jobId} onApprove={handleApprove} onSkip={reset} />
         )}
 
         {state === 'styling' && (
@@ -324,7 +321,7 @@ export default function App() {
   )
 }
 
-/* Inline component — Phase 4 approval gate */
+/* Inline component — Phase 4 cinematic review gate */
 function ApprovalGate({
   jobId,
   onApprove,
@@ -335,42 +332,56 @@ function ApprovalGate({
   onSkip: () => void
 }) {
   return (
-    <div className="approval-gate">
-      <div className="approval-preview">
-        <div className="approval-preview-label">Base video — 72-frame pyrender (no AI styling)</div>
-        <div className="video-player-wrap">
-          <video
-            src={`/jobs/${jobId}/base_video`}
-            controls
-            autoPlay
-            loop
-            playsInline
-            className="video-player"
-          />
+    <div className="review-gate animate-fade-in">
+
+      {/* Film-grade header bar */}
+      <div className="review-header">
+        <div className="review-header-left">
+          <span className="review-tag">REVIEW</span>
+          <span className="review-phase">PHASE 3 COMPLETE</span>
+        </div>
+        <div className="review-header-right">
+          <span className="review-meta-item">72 FRAMES</span>
+          <span className="review-meta-sep">·</span>
+          <span className="review-meta-item">3S @ 24FPS</span>
+          <span className="review-meta-sep">·</span>
+          <span className="review-meta-item">1920×1080</span>
+          <span className="review-meta-sep">·</span>
+          <span className="review-meta-item review-meta-unstyled">UNSTYLED RENDER</span>
         </div>
       </div>
-      <div className="approval-panel">
-        <div className="approval-warning">
-          <span className="approval-warning-icon">!</span>
-          <div>
-            <div className="approval-warning-title">Kling AI styling takes ~3 minutes</div>
-            <div className="approval-warning-body">
-              Phase 4 uploads this video to fal.ai and applies studio lighting,
-              materials, and environment via Kling o1. This consumes FAL credits.
-              Review the base render above before proceeding.
-            </div>
-          </div>
+
+      {/* Video — cinematic, dominant */}
+      <div className="review-video-stage">
+        <div className="review-vignette" />
+        <video
+          src={`/jobs/${jobId}/base_video`}
+          controls
+          autoPlay
+          loop
+          playsInline
+          className="review-video"
+        />
+        <div className="review-scanlines" />
+      </div>
+
+      {/* Action row */}
+      <div className="review-actions">
+        <div className="review-actions-left">
+          <button className="review-proceed-btn" onClick={onApprove}>
+            <span className="review-proceed-label">Proceed to AI Styling</span>
+            <span className="review-proceed-arrow">→</span>
+          </button>
+          <button className="review-redo-btn" onClick={onSkip}>
+            ↺ Redo / Change Settings
+          </button>
         </div>
-        <div className="approval-actions">
-          <button className="approve-btn" onClick={onApprove}>
-            Apply AI Styling
-            <span className="generate-arrow">→</span>
-          </button>
-          <button className="skip-btn" onClick={onSkip}>
-            Keep base video &amp; finish
-          </button>
+        <div className="review-actions-ticker">
+          <span className="review-ticker-dot" />
+          <span>~3 MIN &nbsp;·&nbsp; KLING O1 EDIT &nbsp;·&nbsp; FAL CREDITS CONSUMED</span>
         </div>
       </div>
+
     </div>
   )
 }
