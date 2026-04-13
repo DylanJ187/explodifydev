@@ -173,3 +173,37 @@ class GeometryAnalyzer:
             i: (mesh.centroid - assembly_centroid) * scalar
             for i, mesh in enumerate(meshes)
         }
+
+    def dual_axis_explosion_vectors(
+        self, named_meshes: List[NamedMesh], scalar: float
+    ) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
+        """Compute two explosion variants: along the longest and shortest axes.
+
+        Returns:
+            (longest_axis_vectors, shortest_axis_vectors)
+        """
+        meshes = [nm.mesh for nm in named_meshes]
+        all_verts = np.vstack([m.vertices for m in meshes])
+        extents = all_verts.max(axis=0) - all_verts.min(axis=0)
+        axis_order = np.argsort(extents)
+        shortest_idx = int(axis_order[0])
+        longest_idx = int(axis_order[2])
+
+        assembly_centroid = np.mean([m.centroid for m in meshes], axis=0)
+        boost = 2.5
+
+        def _axis_vectors(axis_idx: int) -> dict[int, np.ndarray]:
+            result: dict[int, np.ndarray] = {}
+            for i, mesh in enumerate(meshes):
+                diff = mesh.centroid - assembly_centroid
+                projected = np.zeros(3)
+                projected[axis_idx] = diff[axis_idx] * scalar * boost
+                if abs(projected[axis_idx]) < 1e-6:
+                    projected[axis_idx] = (
+                        scalar * boost * 0.3
+                        * (1.0 if i % 2 == 0 else -1.0)
+                    )
+                result[i] = projected
+            return result
+
+        return _axis_vectors(longest_idx), _axis_vectors(shortest_idx)

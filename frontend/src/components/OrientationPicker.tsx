@@ -30,14 +30,14 @@ const GRID_STYLE: React.CSSProperties = {
     ".    bottom ."
     ".    back   ."
   `,
-  gridTemplateColumns: 'repeat(3, 1fr)',
-  gridTemplateRows: 'repeat(4, 28px)',
-  gap: '2px',
+  gridTemplateColumns: 'repeat(3, 64px)',
+  gridTemplateRows: 'repeat(4, 56px)',
+  gap: '4px',
 }
 
 export function OrientationPicker({ selectedFace, onFaceChange, disabled }: Props) {
   return (
-    <div>
+    <div className="orient-picker">
       <div style={GRID_STYLE}>
         {FACES.map(({ name, label, gridArea }) => {
           const isSelected = selectedFace === name
@@ -58,9 +58,6 @@ export function OrientationPicker({ selectedFace, onFaceChange, disabled }: Prop
           )
         })}
       </div>
-      <p className="orient-selected-info">
-        View: <strong>{selectedFace}</strong>
-      </p>
     </div>
   )
 }

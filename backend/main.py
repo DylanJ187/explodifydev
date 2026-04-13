@@ -21,7 +21,7 @@ app = FastAPI(title="Explodify API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=["http://localhost:5173", "http://localhost:3000", "http://localhost:5174"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -31,14 +31,10 @@ PREVIEW_DIR = Path(tempfile.gettempdir()) / "explodify_previews"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
-# Sample file bundled with the frontend (served from public/)
 _FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "public"
 SAMPLE_OBJ = _FRONTEND_DIR / "sample.obj"
 
-# Pre-rendered sample videos for demo mode (no pipeline required)
-SAMPLE_DIR = Path(__file__).parent.parent / "samples"
-SAMPLE_BASE_VIDEO = SAMPLE_DIR / "base_video.mp4"
-SAMPLE_FINAL_VIDEO = SAMPLE_DIR / "final_video.mp4"
+VARIANT_NAMES = ("longest", "shortest")
 
 
 @app.get("/health")
@@ -46,56 +42,11 @@ def health():
     return {"status": "ok"}
 
 
-@app.post("/demo", status_code=201)
-async def create_demo():
-    """Create a demo job pre-loaded with bundled sample videos.
-
-    Skips the full pipeline — copies the sample base_video.mp4 (and
-    final_video.mp4 if present) into a fresh job directory and sets the
-    job to awaiting_approval immediately so the UI review gate is shown.
-    """
-    import shutil
-
-    if not SAMPLE_BASE_VIDEO.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="Sample videos not found. Run the e2e test first or add samples/ to the project.",
-        )
-
-    job_id = jobs.create_job()
-    output_dir = UPLOAD_DIR / job_id
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    shutil.copy(str(SAMPLE_BASE_VIDEO), str(output_dir / "base_video.mp4"))
-    if SAMPLE_FINAL_VIDEO.exists():
-        shutil.copy(str(SAMPLE_FINAL_VIDEO), str(output_dir / "final_video.mp4"))
-
-    # Mark phases 1-3 done so /base_video endpoint allows serving
-    jobs.update_phase(job_id, 1, "done")
-    jobs.update_phase(job_id, 2, "done")
-    jobs.update_phase(job_id, 3, "done")
-
-    # Start a lightweight background task that just waits for approval
-    asyncio.create_task(_demo_pipeline(job_id, has_styled=SAMPLE_FINAL_VIDEO.exists()))
-
-    return {"job_id": job_id}
-
-
-async def _demo_pipeline(job_id: str, has_styled: bool) -> None:
-    """Wait for user approval, then mark done (sample videos already in place)."""
-    approval_event = jobs.mark_awaiting_approval(job_id)
-    await approval_event.wait()
-    jobs.update_phase(job_id, 4, "done")
-    jobs.mark_done(job_id, ai_styled=has_styled)
-
-
 @app.get("/preview/sample")
 async def preview_sample():
-    """Return orientation previews for the bundled sample model (no upload required)."""
     if not SAMPLE_OBJ.exists():
         raise HTTPException(status_code=404, detail="Sample file not found on server.")
 
-    # Reuse an existing render if we already processed this session to save time.
     cached = list(PREVIEW_DIR.glob("sample_*"))
     preview_id = cached[0].stem.replace("sample_", "") if cached else None
 
@@ -115,7 +66,6 @@ async def preview_sample():
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    # Tag the file so we can find the cached render next time
     cached_marker = PREVIEW_DIR / f"sample_{preview_id}"
     cached_marker.touch(exist_ok=True)
 
@@ -124,11 +74,6 @@ async def preview_sample():
 
 @app.post("/preview")
 async def preview_orientations(file: UploadFile = File(...)):
-    """Upload a CAD file and receive 6 orthographic face screenshots for orientation selection.
-
-    Returns a preview_id (reused when creating the job) plus base64 PNG data URIs
-    for each of the six cubic faces: front, back, left, right, top, bottom.
-    """
     preview_id = str(uuid.uuid4())
     suffix = Path(file.filename or "upload.obj").suffix.lower()
     preview_path = PREVIEW_DIR / f"{preview_id}{suffix}"
@@ -141,9 +86,6 @@ async def preview_orientations(file: UploadFile = File(...)):
         from pipeline.orientation_preview import render_orientation_previews
         from pipeline.phase1_geometry import GeometryAnalyzer
 
-        # Run synchronously on the main thread — pyrender's Cocoa/pyglet backend
-        # requires the OS main thread on macOS.  Blocking the event loop here is
-        # acceptable since this is a short-lived preview render (< 15 s).
         named_meshes = load_assembly(str(preview_path))
         named_meshes = GeometryAnalyzer().reorient(named_meshes)
         images = render_orientation_previews(named_meshes)
@@ -170,19 +112,13 @@ async def create_job(
     master_angle: str = Form("front"),
     rotation_offset_deg: float = Form(0.0),
     orbit_range_deg: float = Form(40.0),
+    camera_zoom: float = Form(1.0),
+    variants_to_render: str = Form("longest,shortest"),
 ):
-    """Create a background exploded-view job.
-
-    Supply either a fresh `file` upload or a `preview_id` returned from POST /preview.
-    The `master_angle` (front/back/left/right/top/bottom) sets the camera direction.
-    `rotation_offset_deg` rotates the camera roll (0/90/180/270) to correct model alignment.
-    `orbit_range_deg` controls total camera orbit from frame A to frame E (default 40°,
-    max 60° for Kling interpolation safety).
-    """
     if preview_id:
         matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
         if not matches:
-            raise HTTPException(status_code=404, detail="Preview not found — re-upload the file.")
+            raise HTTPException(status_code=404, detail="Preview not found -- re-upload the file.")
         cad_path = matches[0]
     elif file is not None:
         suffix = Path(file.filename or "upload.obj").suffix.lower()
@@ -193,6 +129,11 @@ async def create_job(
         raise HTTPException(status_code=422, detail="Either file or preview_id is required.")
 
     job_id = jobs.create_job()
+
+    parsed_variants = [
+        v.strip() for v in variants_to_render.split(",")
+        if v.strip() in VARIANT_NAMES
+    ] or list(VARIANT_NAMES)
 
     asyncio.create_task(
         _run_pipeline(
@@ -208,6 +149,8 @@ async def create_job(
             master_angle=master_angle,
             rotation_offset_deg=rotation_offset_deg,
             orbit_range_deg=orbit_range_deg,
+            camera_zoom=camera_zoom,
+            variants_to_render=parsed_variants,
         )
     )
 
@@ -224,7 +167,6 @@ def get_job(job_id: str):
 
 @app.get("/jobs/{job_id}/frames/{frame_name}")
 def get_frame(job_id: str, frame_name: str):
-    """Serve one of the 5 raw keyframe PNGs (frame_a … frame_e)."""
     allowed = {"frame_a", "frame_b", "frame_c", "frame_d", "frame_e"}
     if frame_name not in allowed:
         raise HTTPException(status_code=400, detail=f"Unknown frame: {frame_name}")
@@ -250,16 +192,8 @@ async def approve_job(
     warm_tone: Optional[str] = Form(None),
     cold_tone: Optional[str] = Form(None),
     ground_shadow: Optional[str] = Form(None),
+    selected_variants: Optional[str] = Form(None),
 ):
-    """Approve Phase 4 (Kling AI styling) for a job that is awaiting approval.
-
-    Optionally accepts updated style parameters that override the values
-    submitted at job creation time — the user can tweak materials and style
-    while reviewing the base video.
-
-    Must be async so asyncio.Event.set() runs in the same event loop as
-    the pipeline task that is awaiting the event.
-    """
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -287,41 +221,74 @@ async def approve_job(
             "ground_shadow": _to_bool(ground_shadow, True),
         }
 
-    signalled = jobs.approve_phase4(job_id, style_overrides=style_overrides)
+    variants = None
+    if selected_variants:
+        variants = [v.strip() for v in selected_variants.split(",") if v.strip() in VARIANT_NAMES]
+
+    signalled = jobs.approve_phase4(
+        job_id, style_overrides=style_overrides, selected_variants=variants,
+    )
     if not signalled:
         raise HTTPException(status_code=409, detail="Approval event already consumed")
     return {"ok": True}
 
 
-@app.get("/jobs/{job_id}/base_video")
-def get_base_video(job_id: str):
-    """Serve the raw 72-frame assembled mp4 (no AI styling). Available once Phase 3 is done."""
+@app.get("/jobs/{job_id}/base_video/{variant}")
+def get_base_video_variant(job_id: str, variant: str):
     from backend.models import PhaseStatus
+    if variant not in VARIANT_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unknown variant: {variant}")
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.phases.get(3) != PhaseStatus.done:
         raise HTTPException(status_code=425, detail="Base video not ready yet")
-    video_path = UPLOAD_DIR / job_id / "base_video.mp4"
+    video_path = UPLOAD_DIR / job_id / f"base_video_{variant}.mp4"
     if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Base video file not found")
+        raise HTTPException(status_code=404, detail=f"Base video ({variant}) not found")
     return FileResponse(str(video_path), media_type="video/mp4")
 
 
-@app.get("/jobs/{job_id}/video")
-def get_video(job_id: str):
-    """Serve the final styled mp4 (Phase 4), falling back to base_video if not yet styled."""
+@app.get("/jobs/{job_id}/base_video")
+def get_base_video(job_id: str):
+    """Legacy endpoint -- serves the longest-axis variant."""
+    return get_base_video_variant(job_id, "longest")
+
+
+@app.get("/jobs/{job_id}/loop_video/{variant}")
+def get_loop_video(job_id: str, variant: str):
+    if variant not in VARIANT_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unknown variant: {variant}")
+    job = jobs.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    path = UPLOAD_DIR / job_id / f"loop_video_{variant}.mp4"
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Loop video not ready")
+    return FileResponse(str(path), media_type="video/mp4")
+
+
+@app.get("/jobs/{job_id}/video/{variant}")
+def get_video_variant(job_id: str, variant: str):
+    if variant not in VARIANT_NAMES:
+        raise HTTPException(status_code=400, detail=f"Unknown variant: {variant}")
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status not in ("awaiting_approval", "done"):
         raise HTTPException(status_code=425, detail="Video not ready yet")
-    video_path = UPLOAD_DIR / job_id / "final_video.mp4"
+    video_path = UPLOAD_DIR / job_id / f"final_video_{variant}.mp4"
     if not video_path.exists():
-        video_path = UPLOAD_DIR / job_id / "base_video.mp4"
+        video_path = UPLOAD_DIR / job_id / f"base_video_{variant}.mp4"
     if not video_path.exists():
         raise HTTPException(status_code=404, detail="Video file not found")
     return FileResponse(str(video_path), media_type="video/mp4")
+
+
+@app.get("/jobs/{job_id}/video")
+def get_video(job_id: str):
+    """Legacy endpoint -- serves longest-axis variant."""
+    return get_video_variant(job_id, "longest")
 
 
 async def _run_pipeline(
@@ -339,75 +306,79 @@ async def _run_pipeline(
     master_angle: str = "front",
     rotation_offset_deg: float = 0.0,
     orbit_range_deg: float = 40.0,
+    camera_zoom: float = 1.0,
+    variants_to_render: list[str] | None = None,
 ) -> None:
-    """Run all 4 pipeline phases in a background asyncio task.
-
-    Phase 1 — Geometry: load mesh, compute explosion vectors.
-    Phase 2 — Render:   5 preview PNGs (UI) + 72 video frames at 1920x1080.
-    Phase 3 — Assemble: ffmpeg assembles 72 frames → base_video.mp4 (3s, 24fps).
-    Phase 4 — Style:    Kling o1 edit applies studio style to base video.
-    """
+    _variants = variants_to_render or list(VARIANT_NAMES)
     output_dir = UPLOAD_DIR / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # ── Phase 1: geometry ──────────────────────────────────────────────
+        # -- Phase 1: geometry -------------------------------------------------
         jobs.update_phase(job_id, 1, "running")
         from pipeline.phase1_geometry import GeometryAnalyzer
         analyzer = GeometryAnalyzer()
         meshes = await asyncio.to_thread(analyzer.load, str(cad_path))
         meshes = analyzer.reorient(meshes)
-        vectors = await asyncio.to_thread(analyzer.explosion_vectors, meshes, scalar)
+        longest_vecs, shortest_vecs = await asyncio.to_thread(
+            analyzer.dual_axis_explosion_vectors, meshes, scalar,
+        )
         jobs.update_phase(job_id, 1, "done")
 
-        # ── Phase 2: render ────────────────────────────────────────────────
-        # pyrender uses OpenGL and must run on the main thread on macOS.
-        # The asyncio task runs on the main thread, so calling synchronously is safe.
+        # -- Phase 2: render only requested variants (sequential — pyrender
+        #    requires the main thread on macOS; no parallelism possible here).
         jobs.update_phase(job_id, 2, "running")
         from pipeline.phase2_snapshots import SnapshotRenderer
         renderer = SnapshotRenderer()
 
-        # 2a — 5 preview keyframes for the UI (fast, low-res)
-        renderer.render(
-            meshes,
-            vectors,
-            master_angle,
-            output_dir / "raw",
-            scalar,
-            orbit_range_deg=orbit_range_deg,
-            rotation_offset_deg=rotation_offset_deg,
-        )
-
-        # 2b — 72 video frames at 1920×1080 for ffmpeg assembly
-        renderer.render_video_frames(
-            meshes,
-            vectors,
-            master_angle,
-            output_dir / "video_frames",
+        render_kwargs = dict(
+            master_angle=master_angle,
             num_frames=72,
             orbit_range_deg=orbit_range_deg,
             rotation_offset_deg=rotation_offset_deg,
+            camera_zoom=camera_zoom,
         )
+
+        variant_vecs = {"longest": longest_vecs, "shortest": shortest_vecs}
+        for variant in _variants:
+            print(f"[Phase 2] Rendering {variant}-axis variant...")
+            renderer.render_video_frames(
+                meshes, variant_vecs[variant],
+                output_dir=output_dir / f"video_frames_{variant}",
+                **render_kwargs,
+            )
         jobs.update_phase(job_id, 2, "done")
 
-        # ── Phase 3: ffmpeg assembly ───────────────────────────────────────
+        # -- Phase 3: assemble requested variants (ffmpeg runs in threads) -----
         jobs.update_phase(job_id, 3, "running")
         from pipeline.phase3_assemble import FrameAssembler
         assembler = FrameAssembler()
-        base_video = await asyncio.to_thread(
-            assembler.assemble,
-            output_dir / "video_frames",
-            output_dir / "base_video.mp4",
-        )
+
+        assemble_tasks = [
+            asyncio.to_thread(
+                assembler.assemble,
+                output_dir / f"video_frames_{v}",
+                output_dir / f"base_video_{v}.mp4",
+            )
+            for v in _variants
+        ]
+        await asyncio.gather(*assemble_tasks)
+
+        loop_tasks = [
+            asyncio.to_thread(
+                assembler.reverse_and_concat,
+                output_dir / f"base_video_{v}.mp4",
+                output_dir / f"loop_video_{v}.mp4",
+            )
+            for v in _variants
+        ]
+        await asyncio.gather(*loop_tasks)
         jobs.update_phase(job_id, 3, "done")
 
-        # ── Phase 4: Kling o1 edit (requires user approval) ───────────────
-        # Pause here and let the user review the base video before spending
-        # FAL credits.  The frontend calls POST /jobs/{id}/approve to continue.
+        # -- Phase 4: Kling styling (user selects which variants) --------------
         approval_event = jobs.mark_awaiting_approval(job_id)
         await approval_event.wait()
 
-        # Check for style overrides submitted at approval time
         overrides = jobs.get_approval_style(job_id)
         if overrides:
             material_prompt = overrides["material_prompt"]
@@ -418,6 +389,8 @@ async def _run_pipeline(
             warm_tone = overrides["warm_tone"]
             cold_tone = overrides["cold_tone"]
             ground_shadow = overrides["ground_shadow"]
+
+        selected = jobs.get_approval_variants(job_id)
 
         fal_key = os.environ.get("FAL_KEY", "")
         if not fal_key:
@@ -444,14 +417,18 @@ async def _run_pipeline(
         )
 
         editor = KlingVideoEditor(fal_key=fal_key)
-        await editor.edit(
-            base_video,
-            fal_prompt,
-            output_dir / "final_video.mp4",
-        )
-        jobs.update_phase(job_id, 4, "done")
+        style_tasks = []
+        for variant in selected:
+            base_path = output_dir / f"base_video_{variant}.mp4"
+            final_path = output_dir / f"final_video_{variant}.mp4"
+            if base_path.exists():
+                style_tasks.append(editor.edit(base_path, fal_prompt, final_path))
 
-        jobs.mark_done(job_id, ai_styled=True)
+        if style_tasks:
+            await asyncio.gather(*style_tasks)
+
+        jobs.update_phase(job_id, 4, "done")
+        jobs.mark_done(job_id, ai_styled=len(style_tasks) > 0)
 
     except Exception as exc:
         current_job = jobs.get_job(job_id)

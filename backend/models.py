@@ -18,4 +18,5 @@ class JobStatus(BaseModel):
     current_phase_name: str
     phases: dict[int, PhaseStatus]
     error: Optional[str] = None
-    ai_styled: bool = False   # True when final_video.mp4 was produced by Phase 4
+    ai_styled: bool = False   # True when at least one styled video was produced
+    has_dual_variants: bool = True

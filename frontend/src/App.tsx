@@ -6,8 +6,8 @@ import { StylePanel } from './components/StylePanel'
 import { IdleOutput } from './components/IdleOutput'
 import { LoadingOutput } from './components/LoadingOutput'
 import { VideoOutput } from './components/VideoOutput'
-import { getPreviewImages, createJob, getJobStatus, approvePhase4, createDemoJob } from './api/client'
-import type { JobStatus, FaceName, PreviewResult } from './api/client'
+import { getPreviewImages, createJob, getJobStatus, approvePhase4 } from './api/client'
+import type { JobStatus, FaceName, PreviewResult, VariantName } from './api/client'
 
 type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'awaiting_approval' | 'styling' | 'done' | 'error'
 
@@ -22,8 +22,6 @@ export interface StyleOptions {
   prompt: string
 }
 
-
-
 const DEFAULT_STYLE: StyleOptions = {
   studioLighting: true,
   darkBackdrop: false,
@@ -32,18 +30,6 @@ const DEFAULT_STYLE: StyleOptions = {
   coldTone: false,
   groundShadow: true,
   materialPrompt: '',
-  prompt: '',
-}
-
-// Pre-populated style for demo mode — kept in sync with scripts/rerender_demo.py.
-const DEMO_STYLE: StyleOptions = {
-  studioLighting: true,
-  darkBackdrop: false,
-  whiteBackdrop: false,
-  warmTone: false,
-  coldTone: false,
-  groundShadow: true,
-  materialPrompt: 'brushed aluminium body with machined surfaces, matte black plastic accents, polished metal fasteners',
   prompt: '',
 }
 
@@ -56,9 +42,19 @@ export default function App() {
   const [rotationDeg, setRotationDeg] = useState(0)
   const [orbitRangeDeg, setOrbitRangeDeg] = useState(40)
   const [explodeScalar, setExplodeScalar] = useState(1.5)
+  const [cameraZoom, setCameraZoom] = useState(1.0)
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+  const [selectedVariants, setSelectedVariants] = useState<Set<VariantName>>(new Set(['longest', 'shortest']))
+  const [approvalSelected, setApprovalSelected] = useState<Set<VariantName>>(new Set(['longest', 'shortest']))
+  const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number } | null>(null)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const settingsChanged = renderedSettings !== null && (
+    renderedSettings.explodeScalar !== explodeScalar ||
+    renderedSettings.orbitRangeDeg !== orbitRangeDeg ||
+    renderedSettings.cameraZoom !== cameraZoom
+  )
 
   async function handleUpload(file: File) {
     setErrorMsg(null)
@@ -90,7 +86,7 @@ export default function App() {
     }
   }
 
-  async function handleGenerate() {
+  async function handleGenerate(variantsToRender?: VariantName[]) {
     if (!preview) return
     setErrorMsg(null)
     try {
@@ -109,9 +105,12 @@ export default function App() {
         masterAngle: selectedFace,
         rotationOffsetDeg: rotationDeg,
         orbitRangeDeg,
+        cameraZoom,
+        variantsToRender,
       })
       setJobId(id)
       setJobStatus(null)
+      setRenderedSettings({ explodeScalar, orbitRangeDeg, cameraZoom })
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Job creation failed')
       setState('error')
@@ -145,24 +144,10 @@ export default function App() {
     return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [state, jobId])
 
-  async function handleLoadDemo() {
-    setErrorMsg(null)
-    try {
-      setState('uploading')
-      setStyleOptions(DEMO_STYLE)
-      const id = await createDemoJob()
-      setJobId(id)
-      setState('awaiting_approval')
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Demo load failed')
-      setState('error')
-    }
-  }
-
-  async function handleApprove() {
+  async function handleApprove(variants: VariantName[]) {
     if (!jobId) return
     try {
-      await approvePhase4(jobId, {
+      await approvePhase4(jobId, variants, {
         materialPrompt: styleOptions.materialPrompt,
         stylePrompt: styleOptions.prompt,
         studioLighting: styleOptions.studioLighting,
@@ -172,6 +157,7 @@ export default function App() {
         coldTone: styleOptions.coldTone,
         groundShadow: styleOptions.groundShadow,
       })
+      setSelectedVariants(new Set(variants))
       setState('styling')
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Approval failed')
@@ -188,7 +174,11 @@ export default function App() {
     setRotationDeg(0)
     setOrbitRangeDeg(40)
     setExplodeScalar(1.5)
+    setCameraZoom(1.0)
     setStyleOptions(DEFAULT_STYLE)
+    setSelectedVariants(new Set(['longest', 'shortest']))
+    setApprovalSelected(new Set(['longest', 'shortest']))
+    setRenderedSettings(null)
     setErrorMsg(null)
   }
 
@@ -198,7 +188,7 @@ export default function App() {
   return (
     <div className="app-layout">
 
-      {/* ─── Left panel ─── */}
+      {/* Left panel */}
       <aside className="left-panel">
         <header className="brand-header">
           <span className="wordmark">EXPLOD<em>I</em>FY</span>
@@ -215,13 +205,6 @@ export default function App() {
                 onLoadSample={handleLoadSample}
                 loading={state === 'uploading'}
               />
-              <button
-                className="demo-btn"
-                onClick={handleLoadDemo}
-                disabled={state === 'uploading'}
-              >
-                Try Demo Output
-              </button>
             </section>
           )}
 
@@ -248,7 +231,7 @@ export default function App() {
 
               {state === 'orientation' && (
                 <section className="panel-section animate-fade-in">
-                  <button className="generate-btn" onClick={handleGenerate}>
+                  <button className="generate-btn" onClick={() => handleGenerate()}>
                     Generate Explosion
                     <span className="generate-arrow">→</span>
                   </button>
@@ -266,10 +249,22 @@ export default function App() {
 
               {state === 'awaiting_approval' && (
                 <section className="panel-section animate-fade-in">
-                  <div className="done-indicator">
-                    <span>✓</span>
-                    Base video ready
-                  </div>
+                  {settingsChanged ? (
+                    <>
+                      <div className="settings-changed-indicator">
+                        Settings changed
+                      </div>
+                      <button className="generate-btn" onClick={() => handleGenerate([...approvalSelected])}>
+                        Re-render {approvalSelected.size === 1 ? '1 video' : 'both'}
+                        <span className="generate-arrow">→</span>
+                      </button>
+                    </>
+                  ) : (
+                    <div className="done-indicator">
+                      <span>✓</span>
+                      {approvalSelected.size === 1 ? '1 variant ready' : 'Both variants ready'}
+                    </div>
+                  )}
                 </section>
               )}
 
@@ -309,7 +304,7 @@ export default function App() {
         </div>
       </aside>
 
-      {/* ─── Right panel ─── */}
+      {/* Right panel */}
       <main className="right-panel">
         {state === 'idle' && <IdleOutput />}
 
@@ -325,6 +320,8 @@ export default function App() {
             onFaceChange={(face) => { setSelectedFace(face); setRotationDeg(0) }}
             rotationDeg={rotationDeg}
             onRotationChange={setRotationDeg}
+            cameraZoom={cameraZoom}
+            onZoomChange={setCameraZoom}
           />
         )}
 
@@ -333,7 +330,13 @@ export default function App() {
         )}
 
         {state === 'awaiting_approval' && jobId && (
-          <ApprovalGate jobId={jobId} onApprove={handleApprove} onSkip={reset} />
+          <DualApprovalGate
+            jobId={jobId}
+            onApprove={handleApprove}
+            onSkip={reset}
+            selected={approvalSelected}
+            onSelectionChange={setApprovalSelected}
+          />
         )}
 
         {state === 'styling' && (
@@ -344,12 +347,13 @@ export default function App() {
           <VideoOutput
             jobId={jobId}
             aiStyled={jobStatus?.ai_styled ?? false}
+            selectedVariants={[...selectedVariants]}
           />
         )}
 
         {state === 'error' && (
           <div className="output-error-panel animate-fade-in">
-            No output — see error on left
+            No output -- see error on left
           </div>
         )}
       </main>
@@ -357,62 +361,86 @@ export default function App() {
   )
 }
 
-/* Inline component — Phase 4 cinematic review gate */
-function ApprovalGate({
+
+/* Side-by-side dual variant approval gate */
+function DualApprovalGate({
   jobId,
   onApprove,
   onSkip,
+  selected,
+  onSelectionChange,
 }: {
   jobId: string
-  onApprove: () => void
+  onApprove: (variants: VariantName[]) => void
   onSkip: () => void
+  selected: Set<VariantName>
+  onSelectionChange: (s: Set<VariantName>) => void
 }) {
+  function toggleVariant(v: VariantName) {
+    const next = new Set(selected)
+    if (next.has(v)) {
+      if (next.size > 1) next.delete(v)
+    } else {
+      next.add(v)
+    }
+    onSelectionChange(next)
+  }
+
+  const count = selected.size
+  const isSingle = count === 1
+
   return (
     <div className="review-gate animate-fade-in">
 
-      {/* Film-grade header bar */}
       <div className="review-header">
         <div className="review-header-left">
           <span className="review-tag">REVIEW</span>
-          <span className="review-phase">PHASE 3 COMPLETE</span>
+          <span className="review-phase">EXPLOSION VARIANTS</span>
         </div>
         <div className="review-header-right">
-          <span className="review-meta-item">72 FRAMES</span>
+          <span className="review-meta-item">72 FRAMES EACH</span>
           <span className="review-meta-sep">·</span>
           <span className="review-meta-item">3S @ 24FPS</span>
-          <span className="review-meta-sep">·</span>
-          <span className="review-meta-item">1920×1080</span>
           <span className="review-meta-sep">·</span>
           <span className="review-meta-item review-meta-unstyled">UNSTYLED RENDER</span>
         </div>
       </div>
 
-      {/* Video — dominant, plain player */}
-      <div className="review-video-stage">
-        <video
-          src={`/jobs/${jobId}/base_video`}
-          controls
-          autoPlay
-          loop
-          playsInline
-          className="review-video"
+      <div className={`variant-compare${isSingle ? ' variant-compare--single' : ''}`}>
+        <VariantCard
+          jobId={jobId}
+          variant="longest"
+          label="LONGEST AXIS"
+          description="Explodes along the tallest dimension"
+          selected={selected.has('longest')}
+          collapsed={isSingle && !selected.has('longest')}
+          onToggle={() => toggleVariant('longest')}
+        />
+        <VariantCard
+          jobId={jobId}
+          variant="shortest"
+          label="SHORTEST AXIS"
+          description="Explodes along the narrowest dimension"
+          selected={selected.has('shortest')}
+          collapsed={isSingle && !selected.has('shortest')}
+          onToggle={() => toggleVariant('shortest')}
         />
       </div>
 
-      {/* Action row */}
       <div className="review-actions">
         <div className="review-actions-left">
-          <button className="review-proceed-btn" onClick={onApprove}>
-            <span className="review-proceed-label">Proceed to AI Styling</span>
+          <button
+            className="review-proceed-btn"
+            onClick={() => onApprove([...selected])}
+          >
+            <span className="review-proceed-label">
+              Style {count === 2 ? 'Both' : '1'} Variant{count === 2 ? 's' : ''}
+            </span>
             <span className="review-proceed-arrow">→</span>
           </button>
           <button className="review-redo-btn" onClick={onSkip}>
-            ↺ Redo / Change Settings
+            ↺ Start Over
           </button>
-        </div>
-        <div className="review-actions-ticker">
-          <span className="review-ticker-dot" />
-          <span>~3 MIN &nbsp;·&nbsp; KLING O1 EDIT &nbsp;·&nbsp; FAL CREDITS CONSUMED</span>
         </div>
       </div>
 
@@ -420,7 +448,60 @@ function ApprovalGate({
   )
 }
 
-/* Inline component — face preview + orientation/rotation controls on right panel */
+
+function VariantCard({
+  jobId,
+  variant,
+  label,
+  description,
+  selected,
+  collapsed,
+  onToggle,
+}: {
+  jobId: string
+  variant: VariantName
+  label: string
+  description: string
+  selected: boolean
+  collapsed: boolean
+  onToggle: () => void
+}) {
+  const classes = [
+    'variant-card',
+    selected ? 'variant-card--selected' : '',
+    collapsed ? 'variant-card--collapsed' : '',
+  ].filter(Boolean).join(' ')
+
+  return (
+    <div className={classes} onClick={onToggle}>
+      <div className="variant-card-header">
+        <div className="variant-checkbox">
+          {selected && <span className="variant-check">✓</span>}
+        </div>
+        <div className="variant-label-group">
+          <span className="variant-label">{label}</span>
+          <span className="variant-desc">{description}</span>
+        </div>
+      </div>
+      {!collapsed && (
+        <div className="variant-video-stage">
+          <video
+            src={`/jobs/${jobId}/base_video/${variant}`}
+            controls
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="variant-video"
+          />
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+/* Orientation preview with rotation slider */
 function OrientationPreview({
   imageSrc,
   faceName,
@@ -428,6 +509,8 @@ function OrientationPreview({
   onFaceChange,
   rotationDeg,
   onRotationChange,
+  cameraZoom,
+  onZoomChange,
 }: {
   imageSrc: string
   faceName: string
@@ -435,39 +518,58 @@ function OrientationPreview({
   onFaceChange: (face: FaceName) => void
   rotationDeg: number
   onRotationChange: (deg: number) => void
+  cameraZoom: number
+  onZoomChange: (z: number) => void
 }) {
   return (
     <div className="orient-preview-panel animate-fade-in">
-      <div className="orient-preview-label">{faceName} view</div>
       <div className="orient-preview-frame">
+        <div className="orient-face-badge">{faceName} view</div>
         <img
           src={imageSrc}
           alt={`${faceName} orientation preview`}
           className="orient-preview-img"
-          style={{ transform: `rotate(${rotationDeg}deg)` }}
+          style={{ transform: `rotate(${rotationDeg}deg) scale(${cameraZoom})` }}
           draggable={false}
         />
-      </div>
 
-      <div className="orient-controls">
-        <OrientationPicker
-          selectedFace={selectedFace}
-          onFaceChange={onFaceChange}
-        />
-
-        <div className="orient-rotation-slider">
-          <div className="slider-header">
-            <span className="slider-label">Rotation</span>
-            <span className="slider-value">{rotationDeg}°</span>
-          </div>
-          <input
-            type="range"
-            min={0}
-            max={350}
-            step={5}
-            value={rotationDeg}
-            onChange={(e) => onRotationChange(parseInt(e.target.value))}
+        <div className="orient-overlay-picker">
+          <OrientationPicker
+            selectedFace={selectedFace}
+            onFaceChange={onFaceChange}
           />
+        </div>
+
+        <div className="orient-overlay-sliders">
+          <div className="orient-slider-row">
+            <div className="slider-header">
+              <span className="slider-label">Rotation</span>
+              <span className="slider-value">{rotationDeg}°</span>
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={350}
+              step={5}
+              value={rotationDeg}
+              onChange={(e) => onRotationChange(parseInt(e.target.value))}
+            />
+          </div>
+
+          <div className="orient-slider-row">
+            <div className="slider-header">
+              <span className="slider-label">Zoom</span>
+              <span className="slider-value">{cameraZoom.toFixed(1)}×</span>
+            </div>
+            <input
+              type="range"
+              min={0.5}
+              max={2.0}
+              step={0.1}
+              value={cameraZoom}
+              onChange={(e) => onZoomChange(parseFloat(e.target.value))}
+            />
+          </div>
         </div>
       </div>
     </div>

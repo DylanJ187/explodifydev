@@ -28,11 +28,6 @@ const PIPELINE_PHRASES = [
   'Finalizing render pass...',
 ]
 
-const PIPELINE_PHASES = [
-  { id: 1, name: 'Geometry',  detail: 'Explosion vectors' },
-  { id: 2, name: 'Render',    detail: '72 frames · 1920×1080' },
-  { id: 3, name: 'Assembly',  detail: 'ffmpeg → mp4' },
-]
 
 const STYLING_STAGES = [
   { key: 'upload',   label: 'UPLOAD',   sub: 'Sending to fal.ai' },
@@ -42,29 +37,11 @@ const STYLING_STAGES = [
 
 const TOTAL_STYLING_SECS = 180
 
-function computeProgress(jobStatus: JobStatus | null): number {
-  // Front-loaded: jumps quickly early, slows later (feels faster)
-  if (!jobStatus) return 12
-  const p = jobStatus.phases
-  if (p[3] === 'done') return 100
-  if (p[3] === 'running') return 82
-  if (p[2] === 'done') return 72
-  if (p[2] === 'running') return 40
-  if (p[1] === 'done') return 30
-  if (p[1] === 'running') return 18
-  return 12
-}
-
 function getPhaseDisplayName(jobStatus: JobStatus | null): string {
   if (!jobStatus) return 'INITIALISING'
   return jobStatus.current_phase_name?.toUpperCase() ?? 'PROCESSING'
 }
 
-function getPhaseDetail(jobStatus: JobStatus | null): string {
-  if (!jobStatus) return 'Starting pipeline...'
-  const phase = PIPELINE_PHASES.find(p => p.id === jobStatus.current_phase)
-  return phase?.detail ?? ''
-}
 
 function useStylingStage(active: boolean): string {
   const [stage, setStage] = useState('upload')
@@ -242,20 +219,11 @@ function StandardLoader({ phase, jobStatus }: { phase: 'orientation' | 'pipeline
     return () => clearInterval(t)
   }, [])
 
-  const progress = phase === 'orientation' ? 18 : computeProgress(jobStatus)
   const displayName = phase === 'orientation' ? 'ORIENTATION' : getPhaseDisplayName(jobStatus)
-  const displayDetail = phase === 'orientation' ? 'Computing 6 face previews' : getPhaseDetail(jobStatus)
+  const displayDetail = phase === 'orientation' ? 'Computing 6 face previews' : (jobStatus?.current_phase_name ?? '')
 
   return (
     <div className="pl-root animate-fade-in">
-      {/* Top progress bar */}
-      <div className="pl-progress-rail">
-        <div className="pl-progress-fill" style={{ width: `${progress}%` }}>
-          <div className="pl-progress-glow" />
-        </div>
-        <span className="pl-progress-pct">{progress}%</span>
-      </div>
-
       <div className="pl-body">
         {/* Phase name + detail */}
         <div className="pl-phase-block">
@@ -283,37 +251,6 @@ function StandardLoader({ phase, jobStatus }: { phase: 'orientation' | 'pipeline
           {phrases[phraseIndex]}
         </div>
 
-        {/* Phase tracker — only during pipeline */}
-        {phase === 'pipeline' && (
-          <div className="pl-phases">
-            {PIPELINE_PHASES.map((p, idx) => {
-              const status = jobStatus?.phases[p.id] ?? 'pending'
-              const isActive = status === 'running'
-              const isDone = status === 'done'
-              return (
-                <div key={p.id} className="pl-phase-row">
-                  {idx > 0 && (
-                    <div className={`pl-connector ${isDone || isActive ? 'pl-connector--lit' : ''}`} />
-                  )}
-                  <div className={`pl-phase-step ${isActive ? 'pl-phase-step--active' : ''} ${isDone ? 'pl-phase-step--done' : ''}`}>
-                    <div className="pl-step-indicator">
-                      {isDone
-                        ? <span className="pl-step-check">✓</span>
-                        : isActive
-                          ? <span className="pl-step-pulse" />
-                          : <span className="pl-step-num">{p.id}</span>
-                      }
-                    </div>
-                    <div className="pl-step-text">
-                      <span className="pl-step-name">{p.name}</span>
-                      <span className="pl-step-detail">{p.detail}</span>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
       </div>
     </div>
   )

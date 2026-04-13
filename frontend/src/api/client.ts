@@ -12,10 +12,13 @@ export interface JobStatus {
   phases: PhaseStatus
   error: string | null
   ai_styled: boolean
+  has_dual_variants: boolean
 }
 
 export type FaceName =
   | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
+
+export type VariantName = 'longest' | 'shortest'
 
 export interface PreviewResult {
   preview_id: string
@@ -48,6 +51,8 @@ export async function createJob(
     masterAngle: FaceName
     rotationOffsetDeg: number
     orbitRangeDeg: number
+    cameraZoom: number
+    variantsToRender?: VariantName[]
   },
 ): Promise<string> {
   const form = new FormData()
@@ -64,6 +69,10 @@ export async function createJob(
   form.append('master_angle', options.masterAngle)
   form.append('rotation_offset_deg', String(options.rotationOffsetDeg))
   form.append('orbit_range_deg', String(options.orbitRangeDeg))
+  form.append('camera_zoom', String(options.cameraZoom))
+  if (options.variantsToRender) {
+    form.append('variants_to_render', options.variantsToRender.join(','))
+  }
 
   const resp = await fetch('/jobs', { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Job creation failed: ${resp.statusText}`)
@@ -79,6 +88,7 @@ export async function getJobStatus(jobId: string): Promise<JobStatus> {
 
 export async function approvePhase4(
   jobId: string,
+  selectedVariants: VariantName[],
   styleOpts?: {
     materialPrompt: string
     stylePrompt: string
@@ -91,6 +101,7 @@ export async function approvePhase4(
   },
 ): Promise<void> {
   const form = new FormData()
+  form.append('selected_variants', selectedVariants.join(','))
   if (styleOpts) {
     form.append('material_prompt', styleOpts.materialPrompt)
     form.append('style_prompt', styleOpts.stylePrompt)
@@ -103,12 +114,5 @@ export async function approvePhase4(
   }
   const resp = await fetch(`/jobs/${jobId}/approve`, { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Approval failed: ${resp.statusText}`)
-}
-
-export async function createDemoJob(): Promise<string> {
-  const resp = await fetch('/demo', { method: 'POST' })
-  if (!resp.ok) throw new Error(`Demo creation failed: ${resp.statusText}`)
-  const data = await resp.json()
-  return data.job_id as string
 }
 

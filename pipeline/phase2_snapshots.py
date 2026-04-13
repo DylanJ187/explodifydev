@@ -16,6 +16,13 @@ EXPLOSION_FRACTIONS = [0.0, 0.25, 0.5, 0.75, 1.0]
 FRAME_NAMES = ["frame_a", "frame_b", "frame_c", "frame_d", "frame_e"]
 RESOLUTION = (1024, 768)
 
+
+def _smoothstep(t: float) -> float:
+    """Cubic ease-in-out: 3t^2 - 2t^3.  Maps 0->0 and 1->1 with zero derivative at endpoints."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3.0 - 2.0 * t)
+
+
 _ANGLE_TO_CAM_DIR = {
     # Cardinal faces
     "top":          np.array([ 0.0,  1.0,  0.3]),
@@ -43,6 +50,7 @@ class SnapshotRenderer:
         num_frames: int = VIDEO_FRAMES,
         orbit_range_deg: float = DEFAULT_ORBIT_RANGE_DEG,
         rotation_offset_deg: float = 0.0,
+        camera_zoom: float = 1.0,
     ) -> Path:
         """Render num_frames PNGs at VIDEO_RESOLUTION for ffmpeg assembly (Phase 3).
 
@@ -60,14 +68,16 @@ class SnapshotRenderer:
 
         for i in range(num_frames):
             t = i / max(num_frames - 1, 1)   # 0.0 … 1.0
-            fraction = t
-            orbit_deg = orbit_range_deg * t
+            eased = _smoothstep(t)
+            fraction = eased
+            orbit_deg = orbit_range_deg * eased
 
             exploded = self._apply_explosion(meshes, explosion_vectors, fraction)
             img = self._render_scene(
                 exploded, cam_dir, orbit_deg,
                 up_rotation_deg=rotation_offset_deg,
                 resolution=VIDEO_RESOLUTION,
+                camera_zoom=camera_zoom,
             )
             img.save(str(output_dir / f"video_{i:04d}.png"))
 
@@ -86,6 +96,7 @@ class SnapshotRenderer:
         source_format: str = "",
         orbit_range_deg: float = DEFAULT_ORBIT_RANGE_DEG,
         rotation_offset_deg: float = 0.0,
+        camera_zoom: float = 1.0,
     ) -> FrameSet:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -95,15 +106,18 @@ class SnapshotRenderer:
 
         # Distribute orbit evenly across frames: [0, r/4, r/2, 3r/4, r]
         n = len(FRAME_NAMES)
-        camera_angles = [orbit_range_deg * i / (n - 1) for i in range(n)]
+        camera_angles = [orbit_range_deg * _smoothstep(i / (n - 1)) for i in range(n)]
 
+        eased_fractions = [_smoothstep(f) for f in EXPLOSION_FRACTIONS]
         frame_paths = []
         for fraction, orbit_deg, name in zip(
-            EXPLOSION_FRACTIONS, camera_angles, FRAME_NAMES
+            eased_fractions, camera_angles, FRAME_NAMES
         ):
             exploded = self._apply_explosion(meshes, explosion_vectors, fraction)
             img = self._render_scene(
-                exploded, cam_dir, orbit_deg, up_rotation_deg=rotation_offset_deg,
+                exploded, cam_dir, orbit_deg,
+                up_rotation_deg=rotation_offset_deg,
+                camera_zoom=camera_zoom,
             )
             out_path = output_dir / f"{name}.png"
             img.save(str(out_path))
@@ -147,6 +161,7 @@ class SnapshotRenderer:
         orbit_deg: float,
         up_rotation_deg: float = 0.0,
         resolution: tuple[int, int] | None = None,
+        camera_zoom: float = 1.0,
     ) -> Image.Image:
         import pyrender
 
@@ -155,33 +170,22 @@ class SnapshotRenderer:
             ambient_light=[0.35, 0.35, 0.35],
         )
 
-        for idx, mesh in enumerate(meshes):
-            mat = _extract_material(mesh, idx)
-            pr_mesh = pyrender.Mesh.from_trimesh(mesh, material=mat, smooth=False)
-            pr_scene.add(pr_mesh)
-
-        all_verts = np.vstack([m.vertices for m in meshes])
-        # Use assembly centroid (mean of component centroids) as camera target.
-        # This focuses on the main part cluster rather than being pulled toward
-        # extremes of long features like watch straps.
+        # Compute camera viewing axis first so we can rotate the geometry
+        # around it BEFORE building pyrender meshes. pyrender.Mesh.from_trimesh
+        # snapshots the vertex data at construction time, so mutating the
+        # source trimesh afterwards has no visual effect.
         center = np.mean([m.centroid for m in meshes], axis=0)
-
         base_dir = cam_dir / np.linalg.norm(cam_dir)
-        orbit_rad = math.radians(orbit_deg)
-        cos_o, sin_o = math.cos(orbit_rad), math.sin(orbit_rad)
-        orbited = np.array([
-            base_dir[0] * cos_o - base_dir[2] * sin_o,
-            base_dir[1],
-            base_dir[0] * sin_o + base_dir[2] * cos_o,
-        ])
-        orbited /= np.linalg.norm(orbited)
 
-        # Camera distance is based on the 2D footprint in the camera view plane,
-        # not the full 3D diagonal.  This prevents long straps from causing the
-        # camera to be placed so far away that the watch case appears tiny.
-        depth = all_verts @ orbited
-        footprint = all_verts - np.outer(depth, orbited)
-        scale = np.linalg.norm(footprint.max(axis=0) - footprint.min(axis=0))
+        # Turntable orbit: rotate camera direction around world Y axis.
+        # This keeps the sweep horizontal regardless of viewing angle
+        # (front, top, left, etc.).
+        y_axis = np.array([0.0, 1.0, 0.0])
+        orbit_mat = trimesh.transformations.rotation_matrix(
+            math.radians(orbit_deg), y_axis,
+        )
+        orbited = (orbit_mat[:3, :3] @ base_dir)
+        orbited /= np.linalg.norm(orbited)
 
         # Apply rotation offset by rotating all geometry around the camera
         # viewing axis.  Negate the angle so positive degrees = clockwise in
@@ -193,16 +197,33 @@ class SnapshotRenderer:
             rot_matrix = trimesh.transformations.rotation_matrix(
                 math.radians(-up_rotation_deg), rot_axis, center,
             )
+            meshes = [m.copy() for m in meshes]
             for m in meshes:
                 m.apply_transform(rot_matrix)
-            # Recompute after rotation
-            all_verts = np.vstack([m.vertices for m in meshes])
             center = np.mean([m.centroid for m in meshes], axis=0)
-            depth = all_verts @ orbited
-            footprint = all_verts - np.outer(depth, orbited)
-            scale = np.linalg.norm(footprint.max(axis=0) - footprint.min(axis=0))
 
-        cam_pos = center + orbited * scale * 2.0
+        for idx, mesh in enumerate(meshes):
+            mat = _extract_material(mesh, idx)
+            pr_mesh = pyrender.Mesh.from_trimesh(mesh, material=mat, smooth=False)
+            pr_scene.add(pr_mesh)
+
+        all_verts = np.vstack([m.vertices for m in meshes])
+
+        # Camera distance: fit all geometry in frame using the vertical FoV.
+        # Project vertices onto the camera plane (remove depth component) to get
+        # the 2D footprint, then compute the distance required to contain the
+        # footprint's bounding diagonal within the vertical field of view.
+        # PADDING keeps parts away from the frame edges (25% breathing room).
+        # camera_zoom < 1.0 pulls the camera further back (zoom out);
+        # camera_zoom > 1.0 moves it closer (zoom in).
+        PADDING = 1.25
+        half_yfov = np.pi / 4.0 / 2.0  # yfov = pi/4; half-angle at pi/8
+        depth = all_verts @ orbited
+        footprint = all_verts - np.outer(depth, orbited)
+        scale = np.linalg.norm(footprint.max(axis=0) - footprint.min(axis=0))
+        cam_dist = (scale / 2.0) / math.tan(half_yfov) * PADDING / max(camera_zoom, 0.1)
+
+        cam_pos = center + orbited * cam_dist
         cam_pose = _look_at(cam_pos, center)
 
         res = resolution if resolution is not None else RESOLUTION

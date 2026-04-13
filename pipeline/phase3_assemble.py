@@ -63,3 +63,50 @@ class FrameAssembler:
 
         print(f"[Phase 3] Assembled {fps} fps mp4 → {output_path}")
         return output_path
+
+    def reverse_and_concat(self, forward_path: Path, output_path: Path) -> Path:
+        """Produce a 6-second loop: forward.mp4 + time-reversed copy.
+
+        Uses two ffmpeg passes:
+          1. Reverse the video using the -vf reverse filter.
+          2. Concatenate forward + reversed using the concat demuxer.
+        """
+        forward_path = Path(forward_path)
+        output_path = Path(output_path)
+        tmp_reversed = output_path.parent / f"{output_path.stem}_rev_tmp.mp4"
+        concat_list = output_path.parent / f"{output_path.stem}_concat.txt"
+
+        # Pass 1: reverse
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", str(forward_path),
+                "-vf", "reverse",
+                "-c:v", "libx264", "-preset", "slow", "-crf", "18",
+                "-pix_fmt", "yuv420p",
+                str(tmp_reversed),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        # Pass 2: concat forward + reversed
+        concat_list.write_text(
+            f"file '{forward_path.resolve()}'\nfile '{tmp_reversed.resolve()}'\n"
+        )
+        subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_list),
+                "-c", "copy",
+                str(output_path),
+            ],
+            check=True,
+            capture_output=True,
+        )
+
+        tmp_reversed.unlink(missing_ok=True)
+        concat_list.unlink(missing_ok=True)
+
+        return output_path
