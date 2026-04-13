@@ -7,6 +7,8 @@ import trimesh
 from pipeline.models import (
     ALL_SUPPORTED_FORMATS,
     CASCADIO_FORMATS,
+    TRIMESH_FORMATS,
+    ZIP_FORMATS,
     NamedMesh,
     UnsupportedFormatError,
     UNSUPPORTED_FORMAT_HELP,
@@ -60,6 +62,8 @@ def load_assembly(path: str) -> List[NamedMesh]:
 
     if fmt in CASCADIO_FORMATS:
         loaded = _load_step(p)
+    elif fmt in ZIP_FORMATS:
+        loaded = _load_zip(p)
     else:
         loaded = trimesh.load(str(p), force="scene")
 
@@ -88,6 +92,48 @@ def _load_step(p: Path) -> trimesh.Scene:
         if ret != 0:
             raise RuntimeError(f"cascadio failed (code {ret}) converting {p}")
         return trimesh.load(glb_path, force="scene")
+
+
+def _load_zip(p: Path) -> trimesh.Scene:
+    """Extract a zip archive and load the primary mesh file from it.
+
+    Prefers OBJ (so MTL/texture siblings are co-located in the temp dir),
+    then falls back to other trimesh-supported formats in priority order.
+    Raises UnsupportedFormatError if no usable mesh file is found inside.
+    """
+    import tempfile, zipfile
+
+    PRIORITY = [".obj", ".glb", ".gltf", ".stl", ".ply", ".off", ".3mf"]
+
+    with zipfile.ZipFile(p, "r") as zf:
+        names = zf.namelist()
+
+    # Filter to supported mesh extensions, ignoring macOS __MACOSX cruft.
+    candidates = [
+        n for n in names
+        if Path(n).suffix.lower() in TRIMESH_FORMATS
+        and not n.startswith("__MACOSX")
+        and not Path(n).name.startswith(".")
+    ]
+
+    if not candidates:
+        raise UnsupportedFormatError(
+            f"No supported mesh file found inside {p.name}. "
+            f"Expected one of: {', '.join(sorted(TRIMESH_FORMATS))}"
+        )
+
+    # Pick by priority; fall back to first candidate if none matches.
+    chosen = next(
+        (c for ext in PRIORITY for c in candidates if Path(c).suffix.lower() == ext),
+        candidates[0],
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with zipfile.ZipFile(p, "r") as zf:
+            zf.extractall(tmp)
+        # Resolve the chosen file inside the extraction directory.
+        mesh_path = Path(tmp) / chosen
+        return trimesh.load(str(mesh_path), force="scene")
 
 
 def _detect_format(p: Path) -> str:

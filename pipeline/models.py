@@ -13,10 +13,14 @@ CASCADIO_FORMATS = frozenset({
     ".step", ".stp",
 })
 
-ALL_SUPPORTED_FORMATS = TRIMESH_FORMATS | CASCADIO_FORMATS
+# Zip archives containing a supported mesh file (OBJ+MTL bundle, etc.)
+ZIP_FORMATS = frozenset({".zip"})
+
+ALL_SUPPORTED_FORMATS = TRIMESH_FORMATS | CASCADIO_FORMATS | ZIP_FORMATS
 
 UNSUPPORTED_FORMAT_HELP = """
-Only STEP (.step / .stp) and mesh files (GLB, OBJ, STL, PLY, 3MF) are supported.
+Only STEP (.step / .stp), mesh files (GLB, OBJ, STL, PLY, 3MF), and ZIP archives
+containing a mesh file are supported.
 
 To convert a proprietary CAD file to STEP:
 

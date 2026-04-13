@@ -12,6 +12,7 @@ const FORMATS = [
   { ext: '.glb', note: null },
   { ext: '.stl', note: null },
   { ext: '.step', note: 'STP' },
+  { ext: '.zip', note: null },
 ] as const
 
 export function UploadZone({ onUpload, loading }: Props) {
@@ -70,7 +71,7 @@ export function UploadZone({ onUpload, loading }: Props) {
         <input
           id="cad-file-input"
           type="file"
-          accept=".obj,.glb,.stl,.step,.stp"
+          accept=".obj,.glb,.stl,.step,.stp,.zip"
           style={{ display: 'none' }}
           onChange={handleFileChange}
           disabled={loading}
