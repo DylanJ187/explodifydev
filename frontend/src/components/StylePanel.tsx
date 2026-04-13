@@ -1,5 +1,5 @@
 // frontend/src/components/StylePanel.tsx
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { StyleOptions } from '../App'
 
 const MAX_MATERIAL_CHARS = 400
@@ -36,7 +36,7 @@ export function StylePanel({
   componentNames = [],
   disabled,
 }: Props) {
-  const [perComponentOpen, setPerComponentOpen] = useState(false)
+  const [modalOpen, setModalOpen] = useState(false)
 
   function toggleOption(key: keyof Omit<StyleOptions, 'prompt' | 'componentMaterials'>) {
     onOptionsChange({ ...options, [key]: !options[key] })
@@ -49,12 +49,17 @@ export function StylePanel({
     })
   }
 
-  const hasComponents = componentNames.length > 0
+  function clearAllMaterials() {
+    onOptionsChange({ ...options, componentMaterials: {} })
+  }
+
+  const overrideCount = componentNames.filter(
+    n => (options.componentMaterials[n] ?? '').trim().length > 0
+  ).length
 
   return (
     <div className="style-panel">
 
-      {/* Style checkboxes */}
       <div className="checkbox-grid">
         {CHECKBOX_ITEMS.map(({ key, label }) => {
           const checked = options[key] as boolean
@@ -77,9 +82,25 @@ export function StylePanel({
         })}
       </div>
 
-      {/* Material description */}
+      {/* Materials with customise trigger */}
       <div className="prompt-section">
-        <span className="prompt-section-label">Materials</span>
+        <div className="materials-label-row">
+          <span className="prompt-section-label">Materials</span>
+          {componentNames.length > 0 && (
+            <button
+              className="customise-btn"
+              onClick={() => !disabled && setModalOpen(true)}
+              disabled={disabled}
+              type="button"
+            >
+              {overrideCount > 0 && (
+                <span className="customise-badge">{overrideCount}</span>
+              )}
+              Customise
+              <span className="customise-arrow">↗</span>
+            </button>
+          )}
+        </div>
         <textarea
           className="style-prompt"
           rows={2}
@@ -91,40 +112,6 @@ export function StylePanel({
         />
         <span className="char-counter">{options.materialPrompt.length}/{MAX_MATERIAL_CHARS}</span>
       </div>
-
-      {/* Per-component materials */}
-      {hasComponents && (
-        <div className="per-component-section">
-          <button
-            className="per-component-toggle"
-            onClick={() => setPerComponentOpen(v => !v)}
-            disabled={disabled}
-            type="button"
-          >
-            <span className="prompt-section-label">Per-component materials</span>
-            <span className="per-component-chevron">{perComponentOpen ? '▲' : '▼'}</span>
-          </button>
-
-          {perComponentOpen && (
-            <div className="per-component-list">
-              {componentNames.map(name => (
-                <div key={name} className="per-component-row">
-                  <span className="per-component-name">{name}</span>
-                  <input
-                    className="per-component-input"
-                    type="text"
-                    maxLength={MAX_PER_COMPONENT_CHARS}
-                    placeholder="e.g. brushed steel"
-                    value={options.componentMaterials[name] ?? ''}
-                    onChange={(e) => setComponentMaterial(name, e.target.value)}
-                    disabled={disabled}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Style prompt */}
       <div className="prompt-section">
@@ -181,9 +168,124 @@ export function StylePanel({
         </div>
       </div>
 
+      {/* Per-component material modal */}
+      {modalOpen && (
+        <MaterialModal
+          componentNames={componentNames}
+          componentMaterials={options.componentMaterials}
+          onSet={setComponentMaterial}
+          onClear={clearAllMaterials}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
+
     </div>
   )
 }
+
+
+interface ModalProps {
+  componentNames: string[]
+  componentMaterials: Record<string, string>
+  onSet: (name: string, value: string) => void
+  onClear: () => void
+  onClose: () => void
+}
+
+function MaterialModal({ componentNames, componentMaterials, onSet, onClear, onClose }: ModalProps) {
+  const overlayRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [onClose])
+
+  const filledCount = componentNames.filter(n => (componentMaterials[n] ?? '').trim()).length
+
+  return (
+    <div
+      className="mat-overlay"
+      ref={overlayRef}
+      onClick={(e) => { if (e.target === overlayRef.current) onClose() }}
+    >
+      <div className="mat-modal">
+
+        <div className="mat-modal-header">
+          <div className="mat-modal-title-block">
+            <span className="mat-modal-title">Material<br />Overrides</span>
+            <span className="mat-modal-meta">
+              {componentNames.length} SURFACES
+              {filledCount > 0 && (
+                <span className="mat-modal-meta-count"> · {filledCount} SET</span>
+              )}
+            </span>
+          </div>
+          <button className="mat-close-btn" onClick={onClose} type="button">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+              <line x1="1" y1="1" x2="11" y2="11" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="11" y1="1" x2="1" y2="11" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="mat-modal-divider" />
+
+        <div className="mat-table">
+          <div className="mat-table-head">
+            <span className="mat-col-name">Component</span>
+            <span className="mat-col-material">Material</span>
+          </div>
+          <div className="mat-table-body">
+            {componentNames.map((name, idx) => {
+              const val = componentMaterials[name] ?? ''
+              const filled = val.trim().length > 0
+              return (
+                <div
+                  key={name}
+                  className={['mat-row', filled ? 'mat-row--filled' : ''].filter(Boolean).join(' ')}
+                >
+                  <span className="mat-row-index">{String(idx + 1).padStart(2, '0')}</span>
+                  <span className="mat-row-name">{name}</span>
+                  <input
+                    className="mat-row-input"
+                    type="text"
+                    maxLength={MAX_PER_COMPONENT_CHARS}
+                    placeholder="e.g. brushed steel"
+                    value={val}
+                    onChange={(e) => onSet(name, e.target.value)}
+                    spellCheck={false}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="mat-modal-divider" />
+
+        <div className="mat-modal-footer">
+          <button
+            className="mat-clear-btn"
+            onClick={onClear}
+            type="button"
+            disabled={filledCount === 0}
+          >
+            Clear all
+          </button>
+          <button className="mat-apply-btn" onClick={onClose} type="button">
+            Apply
+            <span className="mat-apply-arrow">→</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+  )
+}
+
 
 function InfoIcon({ text }: { text: string }) {
   return (
