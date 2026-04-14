@@ -42,12 +42,23 @@ _DEFAULT_MATERIAL = (
 
 
 # ---------------------------------------------------------------------------
-# Constraints
+# Hard visual constraints (injected before style notes so Kling weights them
+# above any user phrasing)
 # ---------------------------------------------------------------------------
 
+_HARD_CONSTRAINTS = (
+    "HARD CONSTRAINTS — override any other instruction: "
+    "absolutely no lens flare of any kind; "
+    "background must be a pure infinite void — solid colour or smooth gradient only, "
+    "no physical studio backdrop, no visible backdrop edges or seams, "
+    "no floor-wall joint, no environment geometry visible at any zoom level."
+)
+
+# Closing constraints appended after style notes
 _CONSTRAINTS = (
     "No bloom, glow, lens flare, motion blur, or bokeh. "
-    "Stable exposure and material properties across all frames — no flicker."
+    "Stable exposure and material properties across all frames — no flicker. "
+    "Infinite void background only — no backdrop edges under any circumstance."
 )
 
 
@@ -66,6 +77,7 @@ def build_fal_prompt(
         style_prompt: Free-form style notes (lighting, backdrop, mood).
     """
     sections: list[str] = [_GEOMETRY_LOCK_OPEN]
+    sections.append(_HARD_CONSTRAINTS)
     sections.append(_build_rows_section(rows or []))
     if style_prompt.strip():
         sections.append(style_prompt.strip())

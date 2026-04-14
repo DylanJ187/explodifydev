@@ -20,8 +20,8 @@ const MATERIAL_PRESETS = [
 
 const STYLE_TAGS = [
   { label: 'Studio lighting', phrase: 'hyper realistic ray tracing dramatic studio lighting' },
-  { label: 'Dark backdrop',   phrase: 'near-black studio backdrop' },
-  { label: 'White backdrop',  phrase: 'infinite white backdrop' },
+  { label: 'Dark backdrop',   phrase: 'infinite near-black void background' },
+  { label: 'White backdrop',  phrase: 'infinite pure-white void background' },
   { label: 'Warm tone',       phrase: 'warm golden 3800K lighting amber tones' },
   { label: 'Cold tone',       phrase: 'cool 6500K clinical blue-white lighting' },
   { label: 'Ground shadow',   phrase: 'soft ground plane shadow' },
