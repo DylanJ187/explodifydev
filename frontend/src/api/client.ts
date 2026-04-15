@@ -20,10 +20,16 @@ export type FaceName =
 
 export type VariantName = 'longest' | 'shortest'
 
+export interface ExplosionAxes {
+  longest: [number, number, number]
+  shortest: [number, number, number]
+}
+
 export interface PreviewResult {
   preview_id: string
   images: Record<FaceName, string>
   component_names: string[]
+  explosion_axes: ExplosionAxes
 }
 
 export async function getPreviewImages(file: File): Promise<PreviewResult> {
@@ -48,10 +54,12 @@ export async function createJob(
     explodeScalar: number
     rows: Row[]
     stylePrompt: string
-    masterAngle: FaceName
+    cameraDirection: [number, number, number]
     rotationOffsetDeg: number
     orbitRangeDeg: number
     cameraZoom: number
+    selectedVariant: VariantName
+    easingCurve: number[]
     variantsToRender?: VariantName[]
   },
 ): Promise<string> {
@@ -60,10 +68,12 @@ export async function createJob(
   form.append('explode_scalar', String(options.explodeScalar))
   form.append('component_rows', JSON.stringify(options.rows))
   form.append('style_prompt', options.stylePrompt)
-  form.append('master_angle', options.masterAngle)
+  form.append('camera_direction', JSON.stringify(options.cameraDirection))
   form.append('rotation_offset_deg', String(options.rotationOffsetDeg))
   form.append('orbit_range_deg', String(options.orbitRangeDeg))
   form.append('camera_zoom', String(options.cameraZoom))
+  form.append('selected_variant', options.selectedVariant)
+  form.append('easing_curve', JSON.stringify(options.easingCurve))
   if (options.variantsToRender) {
     form.append('variants_to_render', options.variantsToRender.join(','))
   }

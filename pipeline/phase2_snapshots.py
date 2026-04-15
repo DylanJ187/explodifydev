@@ -18,6 +18,100 @@ def _smoothstep(t: float) -> float:
     return t * t * (3.0 - 2.0 * t)
 
 
+def _sample_velocity(vels: list[float], t: float) -> float:
+    """Catmull-Rom interpolation of velocity at time t from evenly-spaced samples.
+
+    Provides smooth velocity transitions — no abrupt jumps between sample points.
+    """
+    n = len(vels)
+    if n < 2:
+        return vels[0] if vels else 1.0
+    pos = t * (n - 1)
+    i = min(int(pos), n - 2)
+    frac = pos - i
+    # Catmull-Rom tangents using neighbouring samples
+    p0 = vels[max(0, i - 1)]
+    p1 = vels[i]
+    p2 = vels[i + 1]
+    p3 = vels[min(n - 1, i + 2)]
+    t2 = frac * frac
+    t3 = t2 * frac
+    return (
+        0.5 * (
+            2.0 * p1
+            + (-p0 + p2) * frac
+            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+            + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3
+        )
+    )
+
+
+def integrate_velocity_profile(samples: list[float], num_frames: int) -> list[float]:
+    """Convert 5 velocity samples into num_frames normalised position values [0, 1].
+
+    Samples are treated as speed multipliers at t=[0, 0.25, 0.5, 0.75, 1.0].
+    Negative values are clamped to zero (no reversal). The result is normalised
+    so the final position equals 1.0.
+
+    Args:
+        samples: 5 non-negative speed multiplier values.
+        num_frames: Number of output position values.
+
+    Returns:
+        List of num_frames floats in [0, 1].
+    """
+    vels = [max(0.0, v) for v in samples]
+    # Numerically integrate velocity → position using fine sub-steps
+    N = 2000
+    dt = 1.0 / N
+    cumulative = [0.0] * (N + 1)
+    for k in range(N):
+        v = max(0.0, _sample_velocity(vels, k / N))
+        cumulative[k + 1] = cumulative[k] + v * dt
+
+    total = cumulative[N]
+    if total <= 0.0:
+        # Degenerate all-zero velocity: fall back to linear
+        return [i / max(num_frames - 1, 1) for i in range(num_frames)]
+
+    result = []
+    for f in range(num_frames):
+        t = f / max(num_frames - 1, 1)
+        idx = t * N
+        lo = int(idx)
+        frac = idx - lo
+        lo = min(lo, N - 1)
+        pos = cumulative[lo] * (1.0 - frac) + cumulative[min(lo + 1, N)] * frac
+        result.append(pos / total)
+    return result
+
+
+def bezier_ease(x: float, x1: float, y1: float, x2: float, y2: float) -> float:
+    """CSS cubic-bezier easing.
+
+    Given input x in [0, 1], solves for the bezier parameter t such that
+    B_x(t) = x, then returns B_y(t).  Matches CSS cubic-bezier() behaviour.
+
+    Args:
+        x: Input progress value in [0, 1].
+        x1, y1, x2, y2: Bezier control points (P0=(0,0), P3=(1,1)).
+
+    Returns:
+        Output y in approximately [0, 1] (may exceed range with anticipate curves).
+    """
+    x = max(0.0, min(1.0, x))
+    lo, hi = 0.0, 1.0
+    for _ in range(20):
+        t = (lo + hi) / 2.0
+        bx = 3.0 * t * (1.0 - t) ** 2 * x1 + 3.0 * t ** 2 * (1.0 - t) * x2 + t ** 3
+        if bx < x:
+            lo = t
+        else:
+            hi = t
+    t = (lo + hi) / 2.0
+    return 3.0 * t * (1.0 - t) ** 2 * y1 + 3.0 * t ** 2 * (1.0 - t) * y2 + t ** 3
+
+
 _ANGLE_TO_CAM_DIR = {
     # Cardinal faces
     "top":          np.array([ 0.0,  1.0,  0.3]),
@@ -40,12 +134,13 @@ class SnapshotRenderer:
         self,
         named_meshes: List[NamedMesh],
         explosion_vectors: dict,
-        master_angle: str,
         output_dir: Path,
+        camera_direction: list[float] | None = None,
         num_frames: int = VIDEO_FRAMES,
         orbit_range_deg: float = DEFAULT_ORBIT_RANGE_DEG,
         rotation_offset_deg: float = 0.0,
         camera_zoom: float = 1.0,
+        easing_curve: list[float] | None = None,
     ) -> Path:
         """Render num_frames PNGs at VIDEO_RESOLUTION for ffmpeg assembly (Phase 3).
 
@@ -59,13 +154,32 @@ class SnapshotRenderer:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         meshes = [nm.mesh for nm in named_meshes]
-        cam_dir = _pick_camera_direction(meshes, master_angle)
+
+        if camera_direction is not None and len(camera_direction) == 3:
+            arr = np.array(camera_direction, dtype=np.float64)
+            norm = np.linalg.norm(arr)
+            cam_dir = arr / norm if norm > 1e-6 else np.array([0.3, 0.3, 1.0])
+        else:
+            cam_dir = np.array([0.3, 0.3, 1.0])
+
+        _curve = easing_curve if easing_curve and len(easing_curve) in (4, 5) else None
+
+        # Pre-compute per-frame positions for velocity profiles (5 samples).
+        # 4-sample bezier curves are evaluated per-frame as before.
+        if _curve is not None and len(_curve) == 5:
+            frame_positions = integrate_velocity_profile(_curve, num_frames)
+        else:
+            frame_positions = None
 
         for i in range(num_frames):
             t = i / max(num_frames - 1, 1)   # 0.0 … 1.0
-            eased = _smoothstep(t)
-            fraction = eased
-            orbit_deg = orbit_range_deg * eased
+            if frame_positions is not None:
+                fraction = frame_positions[i]
+            elif _curve is not None and len(_curve) == 4:
+                fraction = bezier_ease(t, _curve[0], _curve[1], _curve[2], _curve[3])
+            else:
+                fraction = _smoothstep(t)
+            orbit_deg = orbit_range_deg * fraction
 
             exploded = self._apply_explosion(meshes, explosion_vectors, fraction)
             img = self._render_scene(

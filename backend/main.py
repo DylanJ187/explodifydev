@@ -17,6 +17,11 @@ from backend.models import JobStatus
 _PROJECT_ROOT = Path(__file__).parent.parent
 load_dotenv(_PROJECT_ROOT / ".env")
 
+# Set to True to re-enable Kling AI styling (Phase 4).
+# Keep False during development to avoid unexpected charges and to allow
+# the base render approval gate to function correctly.
+_FAL_ENABLED = True
+
 app = FastAPI(title="Explodify API")
 
 app.add_middleware(
@@ -55,14 +60,21 @@ async def preview_orientations(file: UploadFile = File(...)):
         from pipeline.phase1_geometry import GeometryAnalyzer
 
         named_meshes = load_assembly(str(preview_path))
-        named_meshes = GeometryAnalyzer().reorient(named_meshes)
+        analyzer = GeometryAnalyzer()
+        named_meshes = analyzer.reorient(named_meshes)
         images = render_orientation_previews(named_meshes)
+        explosion_axes = analyzer.axis_directions(named_meshes)
     except Exception as exc:
         preview_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc))
 
     component_names = [nm.name for nm in named_meshes]
-    return {"preview_id": preview_id, "images": images, "component_names": component_names}
+    return {
+        "preview_id": preview_id,
+        "images": images,
+        "component_names": component_names,
+        "explosion_axes": explosion_axes,
+    }
 
 
 @app.post("/jobs", status_code=202)
@@ -72,11 +84,13 @@ async def create_job(
     explode_scalar: float = Form(1.5),
     style_prompt: str = Form(""),
     component_rows: str = Form("[]"),
-    master_angle: str = Form("front"),
+    camera_direction: Optional[str] = Form(None),
     rotation_offset_deg: float = Form(0.0),
     orbit_range_deg: float = Form(40.0),
     camera_zoom: float = Form(1.0),
     variants_to_render: str = Form("longest,shortest"),
+    selected_variant: Optional[str] = Form(None),
+    easing_curve: str = Form("[0.25,0.1,0.25,1.0]"),
 ):
     if preview_id:
         matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
@@ -93,10 +107,16 @@ async def create_job(
 
     job_id = jobs.create_job()
 
-    parsed_variants = [
-        v.strip() for v in variants_to_render.split(",")
-        if v.strip() in VARIANT_NAMES
-    ] or list(VARIANT_NAMES)
+    # Determine which variants to render. Always pause for user approval after
+    # phase 3 so the base render can be previewed before AI styling.
+    if selected_variant and selected_variant in VARIANT_NAMES:
+        parsed_variants = [selected_variant]
+    else:
+        parsed_variants = [
+            v.strip() for v in variants_to_render.split(",")
+            if v.strip() in VARIANT_NAMES
+        ] or list(VARIANT_NAMES)
+    auto_approve = False
 
     import json as _json
     try:
@@ -106,16 +126,34 @@ async def create_job(
     except Exception:
         parsed_rows = []
 
+    try:
+        parsed_curve: list[float] = _json.loads(easing_curve)
+        if not isinstance(parsed_curve, list) or len(parsed_curve) not in (4, 5):
+            parsed_curve = None
+    except Exception:
+        parsed_curve = None
+
+    cam_dir_vec: list[float] | None = None
+    if camera_direction:
+        try:
+            parsed_cam_dir = _json.loads(camera_direction)
+            if isinstance(parsed_cam_dir, list) and len(parsed_cam_dir) == 3:
+                cam_dir_vec = [float(v) for v in parsed_cam_dir]
+        except Exception:
+            pass
+
     asyncio.create_task(
         _run_pipeline(
             job_id, cad_path, explode_scalar,
             rows=parsed_rows,
             style_prompt=style_prompt,
-            master_angle=master_angle,
+            camera_direction=cam_dir_vec,
             rotation_offset_deg=rotation_offset_deg,
             orbit_range_deg=orbit_range_deg,
             camera_zoom=camera_zoom,
             variants_to_render=parsed_variants,
+            auto_approve=auto_approve,
+            easing_curve=parsed_curve,
         )
     )
 
@@ -297,7 +335,7 @@ async def _run_phase4_only(
 ) -> None:
     output_dir = UPLOAD_DIR / job_id
     try:
-        fal_key = os.environ.get("FAL_KEY", "")
+        fal_key = os.environ.get("FAL_KEY", "") if _FAL_ENABLED else ""
         if not fal_key:
             import logging
             logging.warning("FAL_KEY not set; skipping restyle phase 4")
@@ -338,11 +376,13 @@ async def _run_pipeline(
     scalar: float,
     rows: list[dict] | None = None,
     style_prompt: str = "",
-    master_angle: str = "front",
+    camera_direction: list[float] | None = None,
     rotation_offset_deg: float = 0.0,
     orbit_range_deg: float = 40.0,
     camera_zoom: float = 1.0,
     variants_to_render: list[str] | None = None,
+    auto_approve: bool = False,
+    easing_curve: list[float] | None = None,
 ) -> None:
     _variants = variants_to_render or list(VARIANT_NAMES)
     output_dir = UPLOAD_DIR / job_id
@@ -367,11 +407,12 @@ async def _run_pipeline(
         renderer = SnapshotRenderer()
 
         render_kwargs = dict(
-            master_angle=master_angle,
+            camera_direction=camera_direction,
             num_frames=72,
             orbit_range_deg=orbit_range_deg,
             rotation_offset_deg=rotation_offset_deg,
             camera_zoom=camera_zoom,
+            easing_curve=easing_curve,
         )
 
         variant_vecs = {"longest": longest_vecs, "shortest": shortest_vecs}
@@ -410,18 +451,23 @@ async def _run_pipeline(
         await asyncio.gather(*loop_tasks)
         jobs.update_phase(job_id, 3, "done")
 
-        # -- Phase 4: Kling styling (user selects which variants) --------------
-        approval_event = jobs.mark_awaiting_approval(job_id)
-        await approval_event.wait()
+        # -- Phase 4: Kling styling -----------------------------------------------
+        # When auto_approve is True (single-variant new flow), skip the approval
+        # gate and proceed immediately with the rendered variants.
+        if auto_approve:
+            selected = _variants
+        else:
+            approval_event = jobs.mark_awaiting_approval(job_id)
+            await approval_event.wait()
 
-        overrides = jobs.get_approval_style(job_id)
-        if overrides:
-            rows = overrides.get("rows") or rows
-            style_prompt = overrides.get("style_prompt", style_prompt)
+            overrides = jobs.get_approval_style(job_id)
+            if overrides:
+                rows = overrides.get("rows") or rows
+                style_prompt = overrides.get("style_prompt", style_prompt)
 
-        selected = jobs.get_approval_variants(job_id)
+            selected = jobs.get_approval_variants(job_id)
 
-        fal_key = os.environ.get("FAL_KEY", "")
+        fal_key = os.environ.get("FAL_KEY", "") if _FAL_ENABLED else ""
         if not fal_key:
             import logging
             logging.warning("FAL_KEY not set; skipping Phase 4 Kling edit")
