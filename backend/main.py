@@ -36,7 +36,7 @@ PREVIEW_DIR = Path(tempfile.gettempdir()) / "explodify_previews"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 
-VARIANT_NAMES = ("longest", "shortest")
+VARIANT_NAMES = ("x", "y", "z")
 
 
 @app.get("/health")
@@ -64,6 +64,21 @@ async def preview_orientations(file: UploadFile = File(...)):
         named_meshes = analyzer.reorient(named_meshes)
         images = render_orientation_previews(named_meshes)
         explosion_axes = analyzer.axis_directions(named_meshes)
+
+        # Export reoriented scene as GLB so the frontend viewer can load any
+        # format (STL, ZIP, STEP, …) without doing its own reorientation.
+        try:
+            import trimesh as _trimesh
+            glb_scene = _trimesh.Scene()
+            for nm in named_meshes:
+                glb_scene.add_geometry(nm.mesh, geom_name=nm.name)
+            glb_bytes = glb_scene.export(file_type="glb")
+            glb_path = PREVIEW_DIR / f"{preview_id}_viewer.glb"
+            glb_path.write_bytes(glb_bytes)
+        except Exception as _glb_exc:
+            import logging as _logging
+            _logging.warning("GLB viewer mesh export failed: %s", _glb_exc)
+
     except Exception as exc:
         preview_path.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=str(exc))
@@ -77,6 +92,14 @@ async def preview_orientations(file: UploadFile = File(...)):
     }
 
 
+@app.get("/preview/{preview_id}/mesh.glb")
+def get_preview_mesh(preview_id: str):
+    glb_path = PREVIEW_DIR / f"{preview_id}_viewer.glb"
+    if not glb_path.exists():
+        raise HTTPException(status_code=404, detail="Viewer mesh not found")
+    return FileResponse(str(glb_path), media_type="model/gltf-binary")
+
+
 @app.post("/jobs", status_code=202)
 async def create_job(
     file: Optional[UploadFile] = File(None),
@@ -88,9 +111,11 @@ async def create_job(
     rotation_offset_deg: float = Form(0.0),
     orbit_range_deg: float = Form(40.0),
     camera_zoom: float = Form(1.0),
-    variants_to_render: str = Form("longest,shortest"),
+    variants_to_render: str = Form("x,y,z"),
     selected_variant: Optional[str] = Form(None),
     easing_curve: str = Form("[0.25,0.1,0.25,1.0]"),
+    orbit_mode: str = Form("horizontal"),
+    orbit_easing: Optional[str] = Form(None),
 ):
     if preview_id:
         matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
@@ -142,6 +167,17 @@ async def create_job(
         except Exception:
             pass
 
+    parsed_orbit_easing: list[float] | None = None
+    if orbit_easing:
+        try:
+            oe = _json.loads(orbit_easing)
+            if isinstance(oe, list) and len(oe) == 5:
+                parsed_orbit_easing = [float(v) for v in oe]
+        except Exception:
+            pass
+
+    parsed_orbit_mode = orbit_mode if orbit_mode in ("horizontal", "vertical") else "horizontal"
+
     asyncio.create_task(
         _run_pipeline(
             job_id, cad_path, explode_scalar,
@@ -154,6 +190,8 @@ async def create_job(
             variants_to_render=parsed_variants,
             auto_approve=auto_approve,
             easing_curve=parsed_curve,
+            orbit_mode=parsed_orbit_mode,
+            orbit_easing=parsed_orbit_easing,
         )
     )
 
@@ -289,7 +327,7 @@ async def restyle_job(
     job_id: str,
     component_rows: str = Form("[]"),
     style_prompt: str = Form(""),
-    selected_variants: str = Form("longest,shortest"),
+    selected_variants: str = Form("x,y,z"),
 ):
     source_job = jobs.get_job(job_id)
     if source_job is None:
@@ -383,6 +421,8 @@ async def _run_pipeline(
     variants_to_render: list[str] | None = None,
     auto_approve: bool = False,
     easing_curve: list[float] | None = None,
+    orbit_mode: str = "horizontal",
+    orbit_easing: list[float] | None = None,
 ) -> None:
     _variants = variants_to_render or list(VARIANT_NAMES)
     output_dir = UPLOAD_DIR / job_id
@@ -395,8 +435,8 @@ async def _run_pipeline(
         analyzer = GeometryAnalyzer()
         meshes = await asyncio.to_thread(analyzer.load, str(cad_path))
         meshes = analyzer.reorient(meshes)
-        longest_vecs, shortest_vecs = await asyncio.to_thread(
-            analyzer.dual_axis_explosion_vectors, meshes, scalar,
+        x_vecs, y_vecs, z_vecs = await asyncio.to_thread(
+            analyzer.triple_axis_explosion_vectors, meshes, scalar,
         )
         jobs.update_phase(job_id, 1, "done")
 
@@ -413,9 +453,11 @@ async def _run_pipeline(
             rotation_offset_deg=rotation_offset_deg,
             camera_zoom=camera_zoom,
             easing_curve=easing_curve,
+            orbit_mode=orbit_mode,
+            orbit_easing=orbit_easing,
         )
 
-        variant_vecs = {"longest": longest_vecs, "shortest": shortest_vecs}
+        variant_vecs = {"x": x_vecs, "y": y_vecs, "z": z_vecs}
         for variant in _variants:
             print(f"[Phase 2] Rendering {variant}-axis variant...")
             renderer.render_video_frames(

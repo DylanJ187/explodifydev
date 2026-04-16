@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from 'react'
 import { UploadZone } from './components/UploadZone'
 import { StylePanel } from './components/StylePanel'
 import { EasingEditor, DEFAULT_EQ_SAMPLES } from './components/EasingEditor'
+import type { OrbitMode } from './components/orientation/createViewer'
 import { MeshViewer } from './components/MeshViewer'
 import type { MeshViewerHandle } from './components/MeshViewer'
 import { IdleOutput } from './components/IdleOutput'
@@ -52,9 +53,11 @@ export default function App() {
   const [cameraZoom, setCameraZoom] = useState(1.0)
   const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [selectedVariant, setSelectedVariant] = useState<VariantName>('longest')
+  const [selectedVariant, setSelectedVariant] = useState<VariantName>('y')
   const [easingCurve, setEasingCurve] = useState<number[]>(DEFAULT_EASING)
-  const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number } | null>(null)
+  const [orbitMode, setOrbitMode] = useState<OrbitMode>('horizontal')
+  const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(DEFAULT_EASING)
+  const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode } | null>(null)
   const [restyleStack, setRestyleStack] = useState<RestyleEntry[]>([])
   const [cameraDirection, setCameraDirection] = useState<[number, number, number]>([0.3, 0.3, 1.0])
   const meshViewerRef = useRef<MeshViewerHandle | null>(null)
@@ -66,7 +69,8 @@ export default function App() {
   const settingsChanged = renderedSettings !== null && (
     renderedSettings.explodeScalar !== explodeScalar ||
     renderedSettings.orbitRangeDeg !== orbitRangeDeg ||
-    renderedSettings.cameraZoom !== cameraZoom
+    renderedSettings.cameraZoom !== cameraZoom ||
+    renderedSettings.orbitMode !== orbitMode
   )
 
   async function handleUpload(file: File) {
@@ -109,11 +113,13 @@ export default function App() {
         cameraZoom,
         selectedVariant,
         easingCurve,
+        orbitMode,
+        orbitEasingCurve,
         variantsToRender,
       })
       setJobId(id)
       setJobStatus(null)
-      setRenderedSettings({ explodeScalar, orbitRangeDeg, cameraZoom })
+      setRenderedSettings({ explodeScalar, orbitRangeDeg, cameraZoom, orbitMode })
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Job creation failed')
       setState('error')
@@ -216,8 +222,10 @@ export default function App() {
     setExplodeScalar(1.5)
     setCameraZoom(1.0)
     setStyleOptions(DEFAULT_STYLE)
-    setSelectedVariant('longest')
+    setSelectedVariant('y')
     setEasingCurve(DEFAULT_EASING)
+    setOrbitMode('horizontal')
+    setOrbitEasingCurve(DEFAULT_EASING)
     setRenderedSettings(null)
     setErrorMsg(null)
     setRestyleStack([])
@@ -275,15 +283,6 @@ export default function App() {
                     onChange={setEasingCurve}
                     disabled={false}
                   />
-                </section>
-              )}
-
-              {state === 'orientation' && (
-                <section className="panel-section animate-fade-in">
-                  <button className="generate-btn" onClick={() => handleGenerate()}>
-                    Generate Explosion
-                    <span className="generate-arrow">→</span>
-                  </button>
                 </section>
               )}
 
@@ -365,6 +364,7 @@ export default function App() {
           <MeshViewer
             ref={meshViewerRef}
             file={uploadedFile}
+            previewId={preview.preview_id}
             previewImages={preview.images}
             explosionAxes={preview.explosion_axes ?? null}
             selectedAxis={selectedVariant}
@@ -373,8 +373,13 @@ export default function App() {
             onExplodeChange={setExplodeScalar}
             orbitRangeDeg={orbitRangeDeg}
             onOrbitRangeChange={setOrbitRangeDeg}
+            orbitMode={orbitMode}
+            onOrbitModeChange={setOrbitMode}
+            orbitEasingCurve={orbitEasingCurve}
+            onOrbitEasingChange={setOrbitEasingCurve}
             onCameraDirectionChange={setCameraDirection}
             initialCameraDirection={lastSubmittedDirection.current}
+            onGenerate={() => handleGenerate()}
           />
         )}
 

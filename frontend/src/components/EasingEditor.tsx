@@ -16,9 +16,9 @@ interface Preset {
 const PRESETS: Preset[] = [
   { id: 'linear',    label: 'Linear',    samples: [1.0,  1.0,  1.0,  1.0,  1.0]  },
   { id: 'cinematic', label: 'Cinematic', samples: [1.8,  1.4,  0.9,  0.4,  0.1]  },
-  { id: 'snap',      label: 'Snap',      samples: [3.5,  1.8,  0.4,  0.05, 0.0]  },
-  { id: 'ease-in',   label: 'Ease In',   samples: [0.1,  0.5,  1.0,  1.6,  2.2]  },
-  { id: 'surge',     label: 'Surge',     samples: [0.8,  2.2,  1.8,  0.6,  0.05] },
+  { id: 'snap',      label: 'Snap',      samples: [2.0,  1.8,  0.4,  0.05, 0.0]  },
+  { id: 'ease-in',   label: 'Ease In',   samples: [0.1,  0.5,  1.0,  1.6,  2.0]  },
+  { id: 'surge',     label: 'Surge',     samples: [0.8,  2.0,  1.8,  0.6,  0.05] },
 ]
 
 export const DEFAULT_EQ_SAMPLES: number[] = [...PRESETS[0].samples]
@@ -35,8 +35,9 @@ const PH    = 120   // plot height
 const XLY   = PY + PH + 16  // x-label y-position
 
 // Y axis represents velocity (speed multiplier). Clamped to [0, Y_HI].
+// Range 0–2 places the 1× reference line at the visual midpoint.
 const Y_LO = 0
-const Y_HI  = 4.0
+const Y_HI  = 2.0
 
 function tToSX(t: number)  { return PX + t * PW }
 function yToSY(y: number)  { return PY + (1 - (y - Y_LO) / (Y_HI - Y_LO)) * PH }
@@ -75,9 +76,9 @@ function matchPreset(samples: number[]): string | null {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const Y_REFS = [
-  { y: 3.0, label: '3×' },
-  { y: 1.5, label: '1.5×' },
-  { y: 0,   label: '0'    },
+  { y: 2.0, label: '2×' },
+  { y: 1.0, label: '1×' },
+  { y: 0,   label: '0'  },
 ]
 
 const X_LABELS = ['Start', '25%', 'Mid', '75%', 'End']
@@ -88,11 +89,12 @@ interface Props {
   value: number[]
   onChange: (samples: number[]) => void
   disabled?: boolean
+  compact?: boolean
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function EasingEditor({ value, onChange, disabled }: Props) {
+export function EasingEditor({ value, onChange, disabled, compact }: Props) {
   const samples       = value.length === 5 ? value : DEFAULT_EQ_SAMPLES
   const svgRef        = useRef<SVGSVGElement>(null)
   const dragIdx       = useRef<number | null>(null)
@@ -146,11 +148,13 @@ export function EasingEditor({ value, onChange, disabled }: Props) {
     }
   }, [onMouseMove, onMouseUp])
 
+  const compactVH = PY + PH + 4  // trim x-label row in compact mode
+
   return (
     <div className={`eq-editor${disabled ? ' eq-editor--disabled' : ''}`}>
 
-      {/* Preset row — custom dropdown matching material preset style */}
-      <div className="eq-header">
+      {/* Preset row — hidden in compact mode */}
+      {!compact && <div className="eq-header">
         <span className="eq-header-label">Preset</span>
         <div className="eq-select-wrap" ref={dropdownRef}>
           <button
@@ -192,12 +196,12 @@ export function EasingEditor({ value, onChange, disabled }: Props) {
             </div>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Main EQ chart */}
       <svg
         ref={svgRef}
-        viewBox={`0 0 ${VW} ${VH}`}
+        viewBox={`0 0 ${VW} ${compact ? compactVH : VH}`}
         className="eq-svg"
         style={{ display: 'block', width: '100%', userSelect: 'none' }}
       >
@@ -256,8 +260,8 @@ export function EasingEditor({ value, onChange, disabled }: Props) {
           </g>
         ))}
 
-        {/* X-axis time labels */}
-        {T_STEPS.map((t, i) => (
+        {/* X-axis time labels — hidden in compact mode */}
+        {!compact && T_STEPS.map((t, i) => (
           <text key={t} x={tToSX(t)} y={XLY} className="eq-x-label" textAnchor="middle">
             {X_LABELS[i]}
           </text>

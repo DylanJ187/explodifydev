@@ -1,7 +1,8 @@
-import { forwardRef, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { ExplosionAxes, VariantName, FaceName } from '../api/client'
 import { OrientationViewer } from './orientation/OrientationViewer'
-import type { Orientation, Vec3 } from './orientation/createViewer'
+import type { Orientation, Vec3, OrbitMode } from './orientation/createViewer'
+import { EasingEditor } from './EasingEditor'
 
 const THREE_D_FORMATS = ['glb', 'gltf', 'obj']
 
@@ -11,6 +12,7 @@ function fileExt(name: string): string {
 
 interface Props {
   file: File
+  previewId?: string
   previewImages: Record<FaceName, string>
   explosionAxes: ExplosionAxes | null
   selectedAxis: VariantName
@@ -19,8 +21,13 @@ interface Props {
   onExplodeChange: (v: number) => void
   orbitRangeDeg: number
   onOrbitRangeChange: (v: number) => void
+  orbitMode: OrbitMode
+  onOrbitModeChange: (mode: OrbitMode) => void
+  orbitEasingCurve: number[]
+  onOrbitEasingChange: (v: number[]) => void
   onCameraDirectionChange?: (dir: Vec3) => void
   initialCameraDirection?: Vec3
+  onGenerate?: () => void
 }
 
 export interface MeshViewerHandle {
@@ -39,6 +46,7 @@ function StaticPreview({ imageSrc, fileName }: { imageSrc: string; fileName: str
 
 export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewer({
   file,
+  previewId,
   previewImages,
   explosionAxes,
   selectedAxis,
@@ -47,15 +55,45 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
   onExplodeChange,
   orbitRangeDeg,
   onOrbitRangeChange,
+  orbitMode,
+  onOrbitModeChange,
+  orbitEasingCurve,
+  onOrbitEasingChange,
   onCameraDirectionChange,
   initialCameraDirection,
+  onGenerate,
 }, ref) {
-  const ext = useMemo(() => fileExt(file.name), [file.name])
-  const is3D = THREE_D_FORMATS.includes(ext)
+  // viewerFile: the file actually loaded into the 3D viewer.
+  // When previewId is set we fetch a backend-reoriented GLB (works for all formats).
+  // Falls back to the original file if the fetch fails or previewId is absent.
+  const [viewerFile, setViewerFile] = useState<File | null>(null)
+
+  useEffect(() => {
+    if (!previewId) {
+      setViewerFile(file)
+      return
+    }
+    setViewerFile(null)
+    let cancelled = false
+    fetch(`/preview/${previewId}/mesh.glb`)
+      .then(r => {
+        if (!r.ok) throw new Error(`${r.status}`)
+        return r.blob()
+      })
+      .then(blob => {
+        if (!cancelled) setViewerFile(new File([blob], `${previewId}.glb`, { type: 'model/gltf-binary' }))
+      })
+      .catch(() => {
+        if (!cancelled) setViewerFile(file)
+      })
+    return () => { cancelled = true }
+  }, [previewId, file])
+
+  const ext = useMemo(() => fileExt(viewerFile?.name ?? file.name), [viewerFile, file.name])
+  const is3D = viewerFile !== null && THREE_D_FORMATS.includes(ext)
   const [forceStatic] = useState(false)
 
   const dirRef = useRef<Vec3>([0.3, 0.3, 1.0])
-  const [displayDir, setDisplayDir] = useState<Vec3>([0.3, 0.3, 1.0])
 
   useImperativeHandle(ref, () => ({
     getCameraDirection: () => dirRef.current,
@@ -71,35 +109,35 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
     const len = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1
     const dir: Vec3 = [dx / len, dy / len, dz / len]
     dirRef.current = dir
-    setDisplayDir(dir)
     onCameraDirectionChange?.(dir)
   }
   const stableOrientationCb = useRef<(o: Orientation) => void>((o) => {
     onChangeCbRef.current?.(o)
   })
 
-  const axisLabel = (a: VariantName) =>
-    a === 'longest' ? 'Longest Axis' : 'Shortest Axis'
-
-  const axisDirection: Vec3 | null = explosionAxes
-    ? (explosionAxes[selectedAxis] as Vec3)
-    : null
+  const axisLabel = (a: VariantName) => {
+    if (a === 'x') return 'X Axis'
+    if (a === 'y') return 'Y Axis'
+    return 'Z Axis'
+  }
 
   const show3D = is3D && !forceStatic
 
   // Progress percentage for slider fill styling
   const explodePct = ((explodeScalar - 0.5) / (4.0 - 0.5)) * 100
-  const orbitPct = (orbitRangeDeg / 60) * 100
+  const orbitPct = (orbitRangeDeg / 360) * 100
 
   return (
     <div className="mesh-viewer-panel animate-fade-in">
       <div className="mesh-viewer-canvas-wrap">
-        {show3D ? (
+        {show3D && viewerFile ? (
           <OrientationViewer
-            file={file}
-            axisDirection={axisDirection}
+            file={viewerFile}
+            allAxes={explosionAxes}
+            selectedAxis={selectedAxis}
             explodeScalar={explodeScalar}
             orbitRangeDeg={orbitRangeDeg}
+            orbitMode={orbitMode}
             onOrientationChange={stableOrientationCb.current}
             initialCameraDirection={initialCameraDirection}
           />
@@ -111,7 +149,7 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
         {explosionAxes && (
           <div className="mesh-viewer-axis-overlay">
             <div className="mesh-viewer-axis-title">Explosion Axis</div>
-            {(['longest', 'shortest'] as VariantName[]).map((axis) => (
+            {(['x', 'y', 'z'] as VariantName[]).map((axis) => (
               <button
                 key={axis}
                 className={[
@@ -128,18 +166,12 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
           </div>
         )}
 
-        {/* Vector readout — bottom right */}
-        {explosionAxes && (
-          <div className="mesh-axis-vector">
-            [{explosionAxes[selectedAxis].map((v) => v.toFixed(2)).join(', ')}]
-          </div>
-        )}
-
-        {/* Camera direction readout — bottom centre */}
-        {show3D && (
-          <div className="mesh-cam-dir-readout">
-            cam [{displayDir.map((v) => v.toFixed(2)).join(', ')}]
-          </div>
+        {/* Generate button — bottom right */}
+        {onGenerate && (
+          <button className="viewer-action-btn" onClick={onGenerate}>
+            Generate Explosion
+            <span>→</span>
+          </button>
         )}
 
         {/* Sliders — bottom left */}
@@ -161,16 +193,45 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
 
           <div className="viewer-slider-row">
             <div className="viewer-slider-header">
-              <span className="viewer-slider-label" style={{ color: '#4a90e2' }}>Camera Orbit</span>
-              <span className="viewer-slider-value" style={{ color: '#4a90e2' }}>{orbitRangeDeg}°</span>
+              <span className="viewer-slider-label" style={{ color: '#00d4ff' }}>Camera Orbit</span>
+              <span className="viewer-slider-value" style={{ color: '#00d4ff' }}>{orbitRangeDeg}°</span>
             </div>
             <input
               type="range"
               className="viewer-slider viewer-slider--orbit"
-              min={0} max={60} step={5}
+              min={0} max={360} step={5}
               value={orbitRangeDeg}
               style={{ '--pct': `${orbitPct}%` } as React.CSSProperties}
               onChange={e => onOrbitRangeChange(parseInt(e.target.value))}
+            />
+            <div className="viewer-orbit-mode">
+              <button
+                className={`viewer-mode-btn${orbitMode === 'horizontal' ? ' viewer-mode-btn--active' : ''}`}
+                onClick={() => onOrbitModeChange('horizontal')}
+              >
+                H
+              </button>
+              <button
+                className={`viewer-mode-btn${orbitMode === 'vertical' ? ' viewer-mode-btn--active' : ''}`}
+                onClick={() => onOrbitModeChange('vertical')}
+              >
+                V
+              </button>
+              <span className="viewer-mode-label">
+                {orbitMode === 'horizontal' ? 'Horizontal' : 'Vertical'}
+              </span>
+            </div>
+          </div>
+
+          <div className="viewer-slider-row">
+            <div className="viewer-slider-header">
+              <span className="viewer-slider-label" style={{ color: '#00d4ff' }}>Orbit Easing</span>
+            </div>
+            <EasingEditor
+              value={orbitEasingCurve}
+              onChange={onOrbitEasingChange}
+              disabled={false}
+              compact
             />
           </div>
         </div>

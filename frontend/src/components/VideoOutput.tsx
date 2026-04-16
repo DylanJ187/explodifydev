@@ -1,5 +1,6 @@
 // frontend/src/components/VideoOutput.tsx
 import { useState } from 'react'
+import type { ReactElement } from 'react'
 import type { VariantName } from '../api/client'
 import type { StyleOptions, RestyleEntry } from '../App'
 import { StylePanel } from './StylePanel'
@@ -14,8 +15,9 @@ interface Props {
 }
 
 const VARIANT_LABELS: Record<VariantName, string> = {
-  longest: 'LONGEST AXIS',
-  shortest: 'SHORTEST AXIS',
+  x: 'X AXIS',
+  y: 'Y AXIS',
+  z: 'Z AXIS',
 }
 
 // ─── Shared video player ──────────────────────────────────────────────────────
@@ -24,10 +26,12 @@ function VideoPlayer({
   jobId,
   variant,
   downloadName,
+  stageOverlay,
 }: {
   jobId: string
   variant: VariantName
   downloadName: string
+  stageOverlay?: ReactElement | false
 }) {
   const [showLoop, setShowLoop] = useState(false)
   const videoUrl = `/jobs/${jobId}/video/${variant}`
@@ -57,6 +61,7 @@ function VideoPlayer({
           playsInline
           className="video-hero-player"
         />
+        {stageOverlay}
       </div>
     </div>
   )
@@ -184,7 +189,7 @@ function RestyleDrawer({
                   ].filter(Boolean).join(' ')}
                   onClick={() => toggleVariant(v)}
                 >
-                  {v === 'longest' ? 'Longest' : 'Shortest'}
+                  {VARIANT_LABELS[v]}
                 </button>
               ))}
             </div>
@@ -205,6 +210,20 @@ function RestyleDrawer({
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Restyle overlay button ───────────────────────────────────────────────────
+
+function RestyleOverlayBtn({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
+  return (
+    <button
+      className="viewer-action-btn"
+      disabled={disabled}
+      onClick={onClick}
+    >
+      ↻ {disabled ? 'Generating...' : 'Re-style with AI'}
+    </button>
   )
 }
 
@@ -259,37 +278,34 @@ export function VideoOutput({
           </div>
         </div>
         <div className={selectedVariants.length === 1 ? 'video-single-layout' : 'video-dual-layout'}>
-          {selectedVariants.map(v => (
+          {selectedVariants.map((v, idx) => (
             <VideoPlayer
               key={v}
               jobId={jobId}
               variant={v}
               downloadName={`explodify_${v}_${aiStyled ? 'styled' : 'base'}_${jobId}.mp4`}
+              stageOverlay={idx === selectedVariants.length - 1 && !drawerOpen ? (
+                <RestyleOverlayBtn
+                  disabled={hasGenerating}
+                  onClick={() => setDrawerOpen(true)}
+                />
+              ) : undefined}
             />
           ))}
         </div>
       </div>
 
-      {/* Re-style controls */}
-      <div className="restyle-controls">
-        {!drawerOpen ? (
-          <button
-            className="restyle-toggle-btn"
-            onClick={() => setDrawerOpen(true)}
-            disabled={hasGenerating}
-          >
-            <span className="restyle-toggle-icon">↻</span>
-            {hasGenerating ? 'Generating...' : 'Re-style'}
-          </button>
-        ) : (
+      {/* Re-style drawer — renders below when open */}
+      {drawerOpen && (
+        <div className="restyle-controls">
           <RestyleDrawer
             styleOptions={styleOptions}
             selectedVariants={selectedVariants}
             onSubmit={handleSubmit}
             onCancel={() => setDrawerOpen(false)}
           />
-        )}
-      </div>
+        </div>
+      )}
 
     </div>
   )

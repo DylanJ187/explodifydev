@@ -63,42 +63,31 @@ class GeometryAnalyzer:
         ]
 
     def axis_directions(self, named_meshes: List[NamedMesh]) -> dict:
-        """Return unit vectors for the longest and shortest bounding-box axes.
+        """Return the three world-space axis unit vectors as x/y/z keys.
 
         Used by the /preview endpoint to expose axis information to the frontend
-        for the interactive Three.js orientation viewer.
+        for the interactive Three.js orientation viewer.  After reorient() the
+        assembly is in standard world orientation, so the axes are simply the
+        three cardinal directions.
 
         Returns:
-            Dict with 'longest' and 'shortest' keys, each a [x, y, z] list.
+            Dict with 'x', 'y', and 'z' keys, each a [x, y, z] unit vector.
         """
-        meshes = [nm.mesh for nm in named_meshes]
-        all_verts = np.vstack([m.vertices for m in meshes])
-        extents = all_verts.max(axis=0) - all_verts.min(axis=0)
-        axis_order = np.argsort(extents)
-        shortest_idx = int(axis_order[0])
-        longest_idx = int(axis_order[2])
-
-        unit = np.eye(3)
         return {
-            "longest": unit[longest_idx].tolist(),
-            "shortest": unit[shortest_idx].tolist(),
+            "x": [1.0, 0.0, 0.0],
+            "y": [0.0, 1.0, 0.0],
+            "z": [0.0, 0.0, 1.0],
         }
 
-    def dual_axis_explosion_vectors(
+    def triple_axis_explosion_vectors(
         self, named_meshes: List[NamedMesh], scalar: float
-    ) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray]]:
-        """Compute two explosion variants: along the longest and shortest axes.
+    ) -> tuple[dict[int, np.ndarray], dict[int, np.ndarray], dict[int, np.ndarray]]:
+        """Compute explosion vectors along each world axis: X, Y, and Z.
 
         Returns:
-            (longest_axis_vectors, shortest_axis_vectors)
+            (x_axis_vectors, y_axis_vectors, z_axis_vectors)
         """
         meshes = [nm.mesh for nm in named_meshes]
-        all_verts = np.vstack([m.vertices for m in meshes])
-        extents = all_verts.max(axis=0) - all_verts.min(axis=0)
-        axis_order = np.argsort(extents)
-        shortest_idx = int(axis_order[0])
-        longest_idx = int(axis_order[2])
-
         assembly_centroid = np.mean([m.centroid for m in meshes], axis=0)
         boost = 1.25
 
@@ -116,4 +105,4 @@ class GeometryAnalyzer:
                 result[i] = projected
             return result
 
-        return _axis_vectors(longest_idx), _axis_vectors(shortest_idx)
+        return _axis_vectors(0), _axis_vectors(1), _axis_vectors(2)

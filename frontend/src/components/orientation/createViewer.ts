@@ -11,6 +11,8 @@ import {
   Group,
   Mesh,
   MeshStandardMaterial,
+  MeshBasicMaterial,
+  ConeGeometry,
   BufferGeometry,
   LineBasicMaterial,
   Line,
@@ -38,11 +40,15 @@ export interface DebugState {
   pixelRatio: number
 }
 
+export type AxisVariant = 'x' | 'y' | 'z'
+export type OrbitMode = 'horizontal' | 'vertical'
+
 export interface ViewerHandle {
   loadModel(url: string, ext: string): Promise<void>
-  setAxis(direction: Vec3 | null): void
+  setAxes(axes: Record<AxisVariant, Vec3> | null, selected: AxisVariant): void
   setExplodeScalar(v: number): void
   setOrbitRange(deg: number): void
+  setOrbitMode(mode: OrbitMode): void
   getOrientation(): Orientation
   onChange(cb: (o: Orientation) => void): () => void
   getDebug(): DebugState
@@ -150,13 +156,12 @@ export function createViewer(
     controls.enabled = false
   })
 
-  scene.add(new AmbientLight(0xffffff, 0.8))
-  const key = new DirectionalLight(0xffffff, 1.8)
-  key.position.set(4, 6, 4)
+  scene.add(new AmbientLight(0xffffff, 0.55))
+  // Key light tracks the camera every frame so it always shines from the viewer.
+  const key = new DirectionalLight(0xffffff, 1.6)
   scene.add(key)
-  const fill = new DirectionalLight(0x6fa8d4, 0.5)
-  fill.position.set(-3, 2, -3)
-  scene.add(fill)
+  // target must be in the scene for updateMatrixWorld to have effect
+  scene.add(key.target)
 
   const modelGroup = new Group()
   scene.add(modelGroup)
@@ -184,9 +189,24 @@ export function createViewer(
   orbitArcLine.visible = false
   orbitGroup.add(orbitArcLine)
 
-  let currentAxis: Vec3 | null = null
+  // Arrow cone at the orbit arc endpoint indicating travel direction.
+  // ConeGeometry(1,1,8) = unit cone pointing along +Y; scaled per-frame.
+  const arrowConeMat = new MeshBasicMaterial({
+    color: 0x00d4ff,
+    depthTest: false,
+    transparent: true,
+    opacity: 0.85,
+  })
+  const arrowCone = new Mesh(new ConeGeometry(1, 1, 8), arrowConeMat)
+  arrowCone.renderOrder = 999
+  arrowCone.visible = false
+  orbitGroup.add(arrowCone)
+
+  let currentAxes: Record<AxisVariant, Vec3> | null = null
+  let currentSelected: AxisVariant = 'y'
   let currentExplodeScalar = 1.5
   let currentOrbitDeg = 40
+  let currentOrbitMode: OrbitMode = 'horizontal'
   let modelCenter = new Vector3()
   let modelDiagonal = 1
   let modelLoaded = false
@@ -235,34 +255,80 @@ export function createViewer(
   const ro = new ResizeObserver(applySize)
   ro.observe(stage)
 
-  // Update the orbit arc each frame to face the camera.
-  // The arc is centered on modelCenter at orbitRadius in the XZ plane (Y-orbit plane),
-  // starting at the camera's current azimuth and sweeping ±orbitRangeDeg/2 degrees.
-  // This matches the backend: phase2_snapshots.py orbits around world Y.
+  // Update the orbit arc each frame.
+  // Horizontal mode: arc sweeps in XZ plane around world Y (turntable).
+  // Vertical mode: arc sweeps in the plane defined by cam direction and world Y (crane).
+  // At 360° the arc closes into a full circle.
+  // An arrow cone at the arc endpoint shows the direction of travel.
   const updateOrbitArc = () => {
     if (!modelLoaded || currentOrbitDeg <= 0) {
       orbitArcLine.visible = false
+      arrowCone.visible = false
       return
     }
     orbitArcLine.visible = true
+    arrowCone.visible = true
 
     const camOffset = camera.position.clone().sub(controls.target)
-    // Azimuth angle in the XZ plane: atan2(x, z) gives 0 when camera is at +Z.
-    const azimuth = Math.atan2(camOffset.x, camOffset.z)
-    const halfAngleRad = (currentOrbitDeg * Math.PI) / 360
     const radius = modelDiagonal * 0.55
+    const TWO_PI = 2 * Math.PI
+    const fullAngleRad = Math.min((currentOrbitDeg * Math.PI) / 180, TWO_PI)
+    const isFullCircle = fullAngleRad >= TWO_PI - 0.01
     const arr = orbitArcPositions.array as Float32Array
 
-    for (let i = 0; i <= ORBIT_ARC_N; i++) {
-      const t = i / ORBIT_ARC_N
-      const angle = azimuth - halfAngleRad + t * 2 * halfAngleRad
-      // sin/cos produces a circle in XZ; arc stays at model center height (Y-orbit)
-      arr[i * 3]     = modelCenter.x + Math.sin(angle) * radius
-      arr[i * 3 + 1] = modelCenter.y
-      arr[i * 3 + 2] = modelCenter.z + Math.cos(angle) * radius
+    if (currentOrbitMode === 'horizontal') {
+      const azimuth = Math.atan2(camOffset.x, camOffset.z)
+      for (let i = 0; i <= ORBIT_ARC_N; i++) {
+        const angle = azimuth + (i / ORBIT_ARC_N) * fullAngleRad
+        arr[i * 3]     = modelCenter.x + Math.sin(angle) * radius
+        arr[i * 3 + 1] = modelCenter.y
+        arr[i * 3 + 2] = modelCenter.z + Math.cos(angle) * radius
+      }
+    } else {
+      // Vertical crane orbit: rotate around the camera's right vector.
+      // upInPlane = component of world Y perpendicular to the camera direction.
+      const camNorm = camOffset.clone().normalize()
+      const dotY = camNorm.y
+      const upInPlane = new Vector3(-camNorm.x * dotY, 1 - dotY * dotY, -camNorm.z * dotY)
+      if (upInPlane.lengthSq() < 1e-6) {
+        upInPlane.set(1, 0, 0)
+      } else {
+        upInPlane.normalize()
+      }
+      for (let i = 0; i <= ORBIT_ARC_N; i++) {
+        const angle = (i / ORBIT_ARC_N) * fullAngleRad
+        const c = Math.cos(angle)
+        const s = Math.sin(angle)
+        arr[i * 3]     = modelCenter.x + radius * (c * camNorm.x + s * upInPlane.x)
+        arr[i * 3 + 1] = modelCenter.y + radius * (c * camNorm.y + s * upInPlane.y)
+        arr[i * 3 + 2] = modelCenter.z + radius * (c * camNorm.z + s * upInPlane.z)
+      }
     }
+
     orbitArcPositions.needsUpdate = true
     orbitArcGeom.computeBoundingSphere()
+
+    // Position and orient the arrow cone at the arc endpoint.
+    // For a full circle use the second-to-last point to get a non-degenerate tangent.
+    const tipIdx = isFullCircle ? ORBIT_ARC_N - 1 : ORBIT_ARC_N
+    const prevIdx = tipIdx - 1
+    const ex = arr[tipIdx * 3], ey = arr[tipIdx * 3 + 1], ez = arr[tipIdx * 3 + 2]
+    const tx = ex - arr[prevIdx * 3]
+    const ty = ey - arr[prevIdx * 3 + 1]
+    const tz = ez - arr[prevIdx * 3 + 2]
+    const tLen = Math.sqrt(tx * tx + ty * ty + tz * tz)
+    if (tLen > 1e-8) {
+      arrowCone.position.set(ex, ey, ez)
+      // Default cone axis is +Y; rotate to match arc tangent.
+      arrowCone.quaternion.setFromUnitVectors(
+        new Vector3(0, 1, 0),
+        new Vector3(tx / tLen, ty / tLen, tz / tLen),
+      )
+      // Scale proportional to modelDiagonal so it looks right at any zoom.
+      const cr = modelDiagonal * 0.025
+      const ch = modelDiagonal * 0.07
+      arrowCone.scale.set(cr, ch, cr)
+    }
   }
 
   let rafId = 0
@@ -280,6 +346,12 @@ export function createViewer(
     } else {
       controls.update()
     }
+    // Keep key light coincident with the camera so it always illuminates
+    // whatever face is visible to the viewer.
+    key.position.copy(camera.position)
+    key.target.position.copy(controls.target)
+    key.target.updateMatrixWorld()
+
     updateOrbitArc()
     renderer.render(scene, camera)
     viewCube.update()
@@ -305,23 +377,24 @@ export function createViewer(
     }
   }
 
-  const rebuildAxisLine = () => {
+  const rebuildAxisLines = () => {
     clearGroup(axisGroup)
-    if (!currentAxis) return
-    const dir = new Vector3(...currentAxis)
+    if (!currentAxes) return
+
+    const dir = new Vector3(...currentAxes[currentSelected])
     if (dir.lengthSq() < 1e-8) return
     dir.normalize()
 
     // Length scales with explosion scalar — matches backend explosion magnitude
     const halfLen = modelDiagonal * 0.4 * currentExplodeScalar
     const start = modelCenter.clone().addScaledVector(dir, -halfLen)
-    const end = modelCenter.clone().addScaledVector(dir, halfLen)
+    const end   = modelCenter.clone().addScaledVector(dir,  halfLen)
 
     const geom = new BufferGeometry()
     geom.setAttribute('position', new Float32BufferAttribute(
       [start.x, start.y, start.z, end.x, end.y, end.z], 3,
     ))
-    const mat = new LineBasicMaterial({ color: 0xf5a623, depthTest: false, transparent: true })
+    const mat = new LineBasicMaterial({ color: 0xd4a843, depthTest: false, transparent: true })
     const line = new Line(geom, mat)
     line.renderOrder = 999
     axisGroup.add(line)
@@ -404,27 +477,38 @@ export function createViewer(
           controls.target.y + (dy / len) * dist,
           controls.target.z + (dz / len) * dist,
         )
+        // Sync camera orientation so it faces the target from the new position.
+        // Without this the quaternion keeps the old direction from fitCameraToModel.
+        camera.up.set(0, 1, 0)
+        camera.lookAt(controls.target)
+        // Prevent TrackballControls from computing a spurious delta on first update.
+        const raw = controls as unknown as Record<string, { copy: (v: unknown) => void }>
+        raw['_rotateEnd']?.copy(raw['_rotateStart'])
         controls.update()
       }
     }
 
-    rebuildAxisLine()
+    rebuildAxisLines()
     emitChange()
   }
 
-  const setAxis = (direction: Vec3 | null) => {
-    currentAxis = direction
-    rebuildAxisLine()
+  const setAxes = (axes: Record<AxisVariant, Vec3> | null, selected: AxisVariant) => {
+    currentAxes = axes
+    currentSelected = selected
+    rebuildAxisLines()
   }
 
   const setExplodeScalar = (v: number) => {
     currentExplodeScalar = v
-    rebuildAxisLine()
+    rebuildAxisLines()
   }
 
   const setOrbitRange = (deg: number) => {
     currentOrbitDeg = deg
-    // Arc geometry is updated dynamically in tick loop
+  }
+
+  const setOrbitMode = (mode: OrbitMode) => {
+    currentOrbitMode = mode
   }
 
   const onChange = (cb: (o: Orientation) => void) => {
@@ -451,7 +535,7 @@ export function createViewer(
     changeCbs.length = 0
   }
 
-  return { loadModel, setAxis, setExplodeScalar, setOrbitRange, getOrientation, onChange, getDebug, dispose }
+  return { loadModel, setAxes, setExplodeScalar, setOrbitRange, setOrbitMode, getOrientation, onChange, getDebug, dispose }
 }
 
 function disposeObject(obj: Object3D) {

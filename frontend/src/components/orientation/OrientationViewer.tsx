@@ -1,13 +1,15 @@
 import { useEffect, useRef, useState } from 'react'
 import { createViewer } from './createViewer'
-import type { Orientation, ViewerHandle, ViewerOptions, Vec3 } from './createViewer'
+import type { Orientation, ViewerHandle, ViewerOptions, Vec3, AxisVariant, OrbitMode } from './createViewer'
 import './orientation.css'
 
 interface Props {
   file: File
-  axisDirection: Vec3 | null
+  allAxes: Record<AxisVariant, Vec3> | null
+  selectedAxis: AxisVariant
   explodeScalar: number
   orbitRangeDeg: number
+  orbitMode?: OrbitMode
   onOrientationChange?: (o: Orientation) => void
   initialCameraDirection?: Vec3
 }
@@ -18,9 +20,11 @@ function fileExt(name: string): string {
 
 export function OrientationViewer({
   file,
-  axisDirection,
+  allAxes,
+  selectedAxis,
   explodeScalar,
   orbitRangeDeg,
+  orbitMode,
   onOrientationChange,
   initialCameraDirection,
 }: Props) {
@@ -52,7 +56,7 @@ export function OrientationViewer({
       .loadModel(url, ext)
       .then(() => {
         if (cancelled) return
-        if (axisDirection) viewer.setAxis(axisDirection)
+        viewer.setAxes(allAxes, selectedAxis)
         viewer.setExplodeScalar(explodeScalar)
         viewer.setOrbitRange(orbitRangeDeg)
       })
@@ -72,8 +76,8 @@ export function OrientationViewer({
   }, [file])
 
   useEffect(() => {
-    viewerRef.current?.setAxis(axisDirection ?? null)
-  }, [axisDirection])
+    viewerRef.current?.setAxes(allAxes, selectedAxis)
+  }, [allAxes, selectedAxis])
 
   useEffect(() => {
     viewerRef.current?.setExplodeScalar(explodeScalar)
@@ -82,6 +86,10 @@ export function OrientationViewer({
   useEffect(() => {
     viewerRef.current?.setOrbitRange(orbitRangeDeg)
   }, [orbitRangeDeg])
+
+  useEffect(() => {
+    if (orbitMode) viewerRef.current?.setOrbitMode(orbitMode)
+  }, [orbitMode])
 
   return (
     <div className="ov-root">

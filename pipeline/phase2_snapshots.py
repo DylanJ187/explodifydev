@@ -141,6 +141,8 @@ class SnapshotRenderer:
         rotation_offset_deg: float = 0.0,
         camera_zoom: float = 1.0,
         easing_curve: list[float] | None = None,
+        orbit_mode: str = "horizontal",
+        orbit_easing: list[float] | None = None,
     ) -> Path:
         """Render num_frames PNGs at VIDEO_RESOLUTION for ffmpeg assembly (Phase 3).
 
@@ -163,6 +165,7 @@ class SnapshotRenderer:
             cam_dir = np.array([0.3, 0.3, 1.0])
 
         _curve = easing_curve if easing_curve and len(easing_curve) in (4, 5) else None
+        _orbit_curve = orbit_easing if orbit_easing and len(orbit_easing) == 5 else None
 
         # Pre-compute per-frame positions for velocity profiles (5 samples).
         # 4-sample bezier curves are evaluated per-frame as before.
@@ -170,6 +173,12 @@ class SnapshotRenderer:
             frame_positions = integrate_velocity_profile(_curve, num_frames)
         else:
             frame_positions = None
+
+        # Orbit easing is always a 5-sample velocity profile, independent of explosion.
+        if _orbit_curve is not None:
+            orbit_frame_positions = integrate_velocity_profile(_orbit_curve, num_frames)
+        else:
+            orbit_frame_positions = None
 
         for i in range(num_frames):
             t = i / max(num_frames - 1, 1)   # 0.0 … 1.0
@@ -179,7 +188,10 @@ class SnapshotRenderer:
                 fraction = bezier_ease(t, _curve[0], _curve[1], _curve[2], _curve[3])
             else:
                 fraction = _smoothstep(t)
-            orbit_deg = orbit_range_deg * fraction
+
+            # Orbit fraction is independent of explosion fraction when orbit_easing supplied.
+            orbit_fraction = orbit_frame_positions[i] if orbit_frame_positions is not None else fraction
+            orbit_deg = orbit_range_deg * orbit_fraction
 
             exploded = self._apply_explosion(meshes, explosion_vectors, fraction)
             img = self._render_scene(
@@ -187,6 +199,7 @@ class SnapshotRenderer:
                 up_rotation_deg=rotation_offset_deg,
                 resolution=VIDEO_RESOLUTION,
                 camera_zoom=camera_zoom,
+                orbit_mode=orbit_mode,
             )
             img.save(str(output_dir / f"video_{i:04d}.png"))
 
@@ -217,6 +230,7 @@ class SnapshotRenderer:
         up_rotation_deg: float = 0.0,
         resolution: tuple[int, int] | None = None,
         camera_zoom: float = 1.0,
+        orbit_mode: str = "horizontal",
     ) -> Image.Image:
         import pyrender
 
@@ -232,12 +246,19 @@ class SnapshotRenderer:
         center = np.mean([m.centroid for m in meshes], axis=0)
         base_dir = cam_dir / np.linalg.norm(cam_dir)
 
-        # Turntable orbit: rotate camera direction around world Y axis.
-        # This keeps the sweep horizontal regardless of viewing angle
-        # (front, top, left, etc.).
+        # Select rotation axis based on orbit_mode.
+        # Horizontal: turntable around world Y (classic).
+        # Vertical: crane around camera's right vector (Y x cam_dir).
         y_axis = np.array([0.0, 1.0, 0.0])
+        if orbit_mode == "vertical":
+            right = np.cross(y_axis, base_dir)
+            right_norm = np.linalg.norm(right)
+            # Fallback when cam_dir is nearly parallel to world Y (top/bottom view).
+            rot_axis = right / right_norm if right_norm > 1e-6 else np.array([1.0, 0.0, 0.0])
+        else:
+            rot_axis = y_axis
         orbit_mat = trimesh.transformations.rotation_matrix(
-            math.radians(orbit_deg), y_axis,
+            math.radians(orbit_deg), rot_axis,
         )
         orbited = (orbit_mat[:3, :3] @ base_dir)
         orbited /= np.linalg.norm(orbited)

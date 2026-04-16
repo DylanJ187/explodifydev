@@ -18,11 +18,12 @@ export interface JobStatus {
 export type FaceName =
   | 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom'
 
-export type VariantName = 'longest' | 'shortest'
+export type VariantName = 'x' | 'y' | 'z'
 
 export interface ExplosionAxes {
-  longest: [number, number, number]
-  shortest: [number, number, number]
+  x: [number, number, number]
+  y: [number, number, number]
+  z: [number, number, number]
 }
 
 export interface PreviewResult {
@@ -60,6 +61,8 @@ export async function createJob(
     cameraZoom: number
     selectedVariant: VariantName
     easingCurve: number[]
+    orbitMode?: string
+    orbitEasingCurve?: number[]
     variantsToRender?: VariantName[]
   },
 ): Promise<string> {
@@ -74,6 +77,12 @@ export async function createJob(
   form.append('camera_zoom', String(options.cameraZoom))
   form.append('selected_variant', options.selectedVariant)
   form.append('easing_curve', JSON.stringify(options.easingCurve))
+  if (options.orbitMode) {
+    form.append('orbit_mode', options.orbitMode)
+  }
+  if (options.orbitEasingCurve) {
+    form.append('orbit_easing', JSON.stringify(options.orbitEasingCurve))
+  }
   if (options.variantsToRender) {
     form.append('variants_to_render', options.variantsToRender.join(','))
   }
