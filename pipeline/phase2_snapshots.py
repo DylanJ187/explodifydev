@@ -61,7 +61,7 @@ def integrate_velocity_profile(samples: list[float], num_frames: int) -> list[fl
         List of num_frames floats in [0, 1].
     """
     vels = [max(0.0, v) for v in samples]
-    # Numerically integrate velocity → position using fine sub-steps
+    # Numerically integrate velocity -> position using fine sub-steps
     N = 2000
     dt = 1.0 / N
     cumulative = [0.0] * (N + 1)
@@ -83,6 +83,37 @@ def integrate_velocity_profile(samples: list[float], num_frames: int) -> list[fl
         lo = min(lo, N - 1)
         pos = cumulative[lo] * (1.0 - frac) + cumulative[min(lo + 1, N)] * frac
         result.append(pos / total)
+    return result
+
+
+def interpolate_position_profile(samples: list[float], num_frames: int) -> list[float]:
+    """Interpolate 5 position samples into num_frames per-frame position values.
+
+    Samples are absolute position values (% exploded, or % orbit completed) at
+    t=[0, 0.25, 0.5, 0.75, 1.0]. Each sample represents the fraction of the
+    animation completed at that time — a direct ramp rather than a velocity.
+
+    The instantaneous speed at any frame is the |gradient| of this ramp.
+    A flat segment -> paused motion; a steep segment -> fast motion.
+
+    Values are clamped to [0, 1] (no overshoot, no negative position).
+
+    Args:
+        samples: 5 position values in [0, 1].
+        num_frames: Number of output position values.
+
+    Returns:
+        List of num_frames floats in [0, 1].
+    """
+    if not samples:
+        return [0.0] * num_frames
+    clamped = [max(0.0, min(1.0, v)) for v in samples]
+    result = []
+    for f in range(num_frames):
+        t = f / max(num_frames - 1, 1)
+        # Reuse Catmull-Rom interpolator (it's a generic spline over evenly-spaced samples).
+        v = _sample_velocity(clamped, t)
+        result.append(max(0.0, min(1.0, v)))
     return result
 
 
@@ -142,6 +173,7 @@ class SnapshotRenderer:
         camera_zoom: float = 1.0,
         easing_curve: list[float] | None = None,
         orbit_mode: str = "horizontal",
+        orbit_direction: int = 1,
         orbit_easing: list[float] | None = None,
     ) -> Path:
         """Render num_frames PNGs at VIDEO_RESOLUTION for ffmpeg assembly (Phase 3).
@@ -167,16 +199,19 @@ class SnapshotRenderer:
         _curve = easing_curve if easing_curve and len(easing_curve) in (4, 5) else None
         _orbit_curve = orbit_easing if orbit_easing and len(orbit_easing) == 5 else None
 
-        # Pre-compute per-frame positions for velocity profiles (5 samples).
-        # 4-sample bezier curves are evaluated per-frame as before.
+        # Pre-compute per-frame positions.
+        # 5-sample curves are POSITION samples (% exploded at t=0, 0.25, 0.5, 0.75, 1.0)
+        # interpolated via Catmull-Rom. Speed at any frame = |gradient| of the ramp.
+        # 4-sample curves remain CSS cubic-bezier easing (legacy path).
         if _curve is not None and len(_curve) == 5:
-            frame_positions = integrate_velocity_profile(_curve, num_frames)
+            frame_positions = interpolate_position_profile(_curve, num_frames)
         else:
             frame_positions = None
 
-        # Orbit easing is always a 5-sample velocity profile, independent of explosion.
+        # Orbit easing is a 5-sample position profile — same semantics as explosion:
+        # each sample is the fraction of orbit completed at that time.
         if _orbit_curve is not None:
-            orbit_frame_positions = integrate_velocity_profile(_orbit_curve, num_frames)
+            orbit_frame_positions = interpolate_position_profile(_orbit_curve, num_frames)
         else:
             orbit_frame_positions = None
 
@@ -191,7 +226,7 @@ class SnapshotRenderer:
 
             # Orbit fraction is independent of explosion fraction when orbit_easing supplied.
             orbit_fraction = orbit_frame_positions[i] if orbit_frame_positions is not None else fraction
-            orbit_deg = orbit_range_deg * orbit_fraction
+            orbit_deg = orbit_range_deg * orbit_fraction * orbit_direction
 
             exploded = self._apply_explosion(meshes, explosion_vectors, fraction)
             img = self._render_scene(
@@ -257,8 +292,10 @@ class SnapshotRenderer:
             rot_axis = right / right_norm if right_norm > 1e-6 else np.array([1.0, 0.0, 0.0])
         else:
             rot_axis = y_axis
+        # Preserve the orbit rotation axis before it may be overwritten below.
+        orbit_rot_axis = rot_axis.copy()
         orbit_mat = trimesh.transformations.rotation_matrix(
-            math.radians(orbit_deg), rot_axis,
+            math.radians(orbit_deg), orbit_rot_axis,
         )
         orbited = (orbit_mat[:3, :3] @ base_dir)
         orbited /= np.linalg.norm(orbited)
@@ -285,37 +322,46 @@ class SnapshotRenderer:
 
         all_verts = np.vstack([m.vertices for m in meshes])
 
-        # Camera distance: fit all geometry in frame using the vertical FoV.
-        # Two constraints are combined with max():
+        # Camera distance: use bounding-sphere radius so the distance is
+        # view-independent (constant across the orbit arc).  Two constraints:
         #
-        #   (a) FOV fit: distance needed so the 2D footprint (geometry projected
-        #       onto the plane perpendicular to the view axis) fills the frame.
-        #       PADDING keeps parts away from the frame edges (25% breathing room).
+        #   (a) Bounding sphere: fit the scene's circumscribed sphere in frame.
+        #       View-invariant — ensures a circular orbit path, not an ellipse.
+        #       PADDING keeps geometry away from frame edges (25% breathing room).
         #
-        #   (b) Depth clearance: distance needed so the camera is outside the
-        #       geometry along the view axis.  Critical for top/bottom views of
-        #       tall objects — without this the camera clips into the model.
-        #       Safety margin is 20% beyond the nearest surface.
+        #   (b) Depth clearance: camera must be outside the geometry along the
+        #       current view axis.  Safety margin is 20% beyond the nearest surface.
         #
         # camera_zoom < 1.0 pulls the camera further back (zoom out);
         # camera_zoom > 1.0 moves it closer (zoom in).
         PADDING = 1.25
         half_yfov = np.pi / 4.0 / 2.0  # yfov = pi/4; half-angle at pi/8
+
+        bbox_min = all_verts.min(axis=0)
+        bbox_max = all_verts.max(axis=0)
+        sphere_r = float(np.linalg.norm(bbox_max - bbox_min)) * 0.5
+        cam_dist_sphere = sphere_r / math.tan(half_yfov) * PADDING
+
         depth = all_verts @ orbited
-        footprint = all_verts - np.outer(depth, orbited)
-        scale = np.linalg.norm(footprint.max(axis=0) - footprint.min(axis=0))
-
-        cam_dist_fov = (scale / 2.0) / math.tan(half_yfov) * PADDING
-
-        # Distance from scene centroid to the nearest surface along the view axis.
         depth_center = float(center @ orbited)
         near_surface = max(0.0, float(depth.max()) - depth_center)
         cam_dist_clearance = near_surface * 1.2
 
-        cam_dist = max(cam_dist_fov, cam_dist_clearance) / max(camera_zoom, 0.1)
+        cam_dist = max(cam_dist_sphere, cam_dist_clearance) / max(camera_zoom, 0.1)
 
         cam_pos = center + orbited * cam_dist
-        cam_pose = _look_at(cam_pos, center)
+
+        # For vertical orbit, rotate the world-up vector by the same angle/axis
+        # as the view direction — prevents the camera from flipping when the
+        # forward direction nears the world Y pole.
+        if orbit_mode == "vertical":
+            up_mat = trimesh.transformations.rotation_matrix(
+                math.radians(orbit_deg), orbit_rot_axis,
+            )
+            cam_up = up_mat[:3, :3] @ np.array([0.0, 1.0, 0.0])
+            cam_pose = _look_at(cam_pos, center, up_hint=cam_up)
+        else:
+            cam_pose = _look_at(cam_pos, center)
 
         res = resolution if resolution is not None else (1024, 768)
         cam = pyrender.PerspectiveCamera(
@@ -326,7 +372,7 @@ class SnapshotRenderer:
 
         key_light = pyrender.DirectionalLight(color=[1.0, 0.97, 0.9], intensity=4.0)
         pr_scene.add(key_light, pose=cam_pose)
-        fill_pos = center + np.array([-orbited[0], orbited[1] + 0.5, -orbited[2]]) * scale
+        fill_pos = center + np.array([-orbited[0], orbited[1] + 0.5, -orbited[2]]) * (sphere_r * 2.0)
         fill_pose = _look_at(fill_pos, center)
         fill_light = pyrender.DirectionalLight(color=[0.7, 0.8, 1.0], intensity=2.0)
         pr_scene.add(fill_light, pose=fill_pose)

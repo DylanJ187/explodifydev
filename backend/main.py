@@ -182,6 +182,7 @@ async def create_job(
     selected_variant: Optional[str] = Form(None),
     easing_curve: str = Form("[0.25,0.1,0.25,1.0]"),
     orbit_mode: str = Form("horizontal"),
+    orbit_direction: int = Form(1),
     orbit_easing: Optional[str] = Form(None),
 ):
     if preview_id:
@@ -244,6 +245,7 @@ async def create_job(
             pass
 
     parsed_orbit_mode = orbit_mode if orbit_mode in ("horizontal", "vertical") else "horizontal"
+    parsed_orbit_direction = orbit_direction if orbit_direction in (1, -1) else 1
 
     asyncio.create_task(
         _run_pipeline(
@@ -258,6 +260,7 @@ async def create_job(
             auto_approve=auto_approve,
             easing_curve=parsed_curve,
             orbit_mode=parsed_orbit_mode,
+            orbit_direction=parsed_orbit_direction,
             orbit_easing=parsed_orbit_easing,
         )
     )
@@ -489,6 +492,7 @@ async def _run_pipeline(
     auto_approve: bool = False,
     easing_curve: list[float] | None = None,
     orbit_mode: str = "horizontal",
+    orbit_direction: int = 1,
     orbit_easing: list[float] | None = None,
 ) -> None:
     _variants = variants_to_render or list(VARIANT_NAMES)
@@ -521,6 +525,7 @@ async def _run_pipeline(
             camera_zoom=camera_zoom,
             easing_curve=easing_curve,
             orbit_mode=orbit_mode,
+            orbit_direction=orbit_direction,
             orbit_easing=orbit_easing,
         )
 

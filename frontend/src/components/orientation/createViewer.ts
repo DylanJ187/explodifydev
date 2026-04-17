@@ -42,6 +42,7 @@ export interface DebugState {
 
 export type AxisVariant = 'x' | 'y' | 'z'
 export type OrbitMode = 'horizontal' | 'vertical'
+export type OrbitDirection = 1 | -1
 
 export interface ViewerHandle {
   loadModel(url: string, ext: string): Promise<void>
@@ -49,6 +50,7 @@ export interface ViewerHandle {
   setExplodeScalar(v: number): void
   setOrbitRange(deg: number): void
   setOrbitMode(mode: OrbitMode): void
+  setOrbitDirection(dir: OrbitDirection): void
   getOrientation(): Orientation
   onChange(cb: (o: Orientation) => void): () => void
   getDebug(): DebugState
@@ -208,9 +210,14 @@ export function createViewer(
   let currentExplodeScalar = 1.5
   let currentOrbitDeg = 40
   let currentOrbitMode: OrbitMode = 'horizontal'
+  let currentOrbitDir: OrbitDirection = 1
   let modelCenter = new Vector3()
   let modelDiagonal = 1
   let modelLoaded = false
+  // Anchor direction for vertical orbit arc — frozen when vertical mode activates.
+  // This keeps the arc fixed in world space so the user can orbit the viewer to
+  // see the arc's curvature from the side, rather than it always being edge-on.
+  let verticalAnchorDir = new Vector3(0.3, 0.3, 1.0).normalize()
 
   const debug: DebugState = {
     rect: { width: 0, height: 0 },
@@ -271,7 +278,10 @@ export function createViewer(
     arrowCone.visible = true
 
     const camOffset = camera.position.clone().sub(controls.target)
-    const radius = modelDiagonal * 0.55
+    // Radius scales with model size (not camera distance) so the arc stays
+    // visually stable across zoom levels. 0.75 × diagonal clears even highly
+    // elongated models (half-extent along longest axis ≤ 0.5 × diagonal).
+    const radius = modelDiagonal * 0.75
     const TWO_PI = 2 * Math.PI
     const fullAngleRad = Math.min((currentOrbitDeg * Math.PI) / 180, TWO_PI)
     const isFullCircle = fullAngleRad >= TWO_PI - 0.01
@@ -280,29 +290,31 @@ export function createViewer(
     if (currentOrbitMode === 'horizontal') {
       const azimuth = Math.atan2(camOffset.x, camOffset.z)
       for (let i = 0; i <= ORBIT_ARC_N; i++) {
-        const angle = azimuth + (i / ORBIT_ARC_N) * fullAngleRad
+        const angle = azimuth + (i / ORBIT_ARC_N) * fullAngleRad * currentOrbitDir
         arr[i * 3]     = modelCenter.x + Math.sin(angle) * radius
         arr[i * 3 + 1] = modelCenter.y
         arr[i * 3 + 2] = modelCenter.z + Math.cos(angle) * radius
       }
     } else {
       // Vertical crane orbit: rotate around the camera's right vector.
-      // upInPlane = component of world Y perpendicular to the camera direction.
-      const camNorm = camOffset.clone().normalize()
-      const dotY = camNorm.y
-      const upInPlane = new Vector3(-camNorm.x * dotY, 1 - dotY * dotY, -camNorm.z * dotY)
+      // Uses verticalAnchorDir (captured when mode was activated, not the live
+      // camera direction) so the arc is fixed in world space — the user can
+      // orbit the viewer to see the arc's curvature from any angle.
+      const baseDir = verticalAnchorDir
+      const dotY = baseDir.y
+      const upInPlane = new Vector3(-baseDir.x * dotY, 1 - dotY * dotY, -baseDir.z * dotY)
       if (upInPlane.lengthSq() < 1e-6) {
         upInPlane.set(1, 0, 0)
       } else {
         upInPlane.normalize()
       }
       for (let i = 0; i <= ORBIT_ARC_N; i++) {
-        const angle = (i / ORBIT_ARC_N) * fullAngleRad
+        const angle = (i / ORBIT_ARC_N) * fullAngleRad * currentOrbitDir
         const c = Math.cos(angle)
         const s = Math.sin(angle)
-        arr[i * 3]     = modelCenter.x + radius * (c * camNorm.x + s * upInPlane.x)
-        arr[i * 3 + 1] = modelCenter.y + radius * (c * camNorm.y + s * upInPlane.y)
-        arr[i * 3 + 2] = modelCenter.z + radius * (c * camNorm.z + s * upInPlane.z)
+        arr[i * 3]     = modelCenter.x + radius * (c * baseDir.x + s * upInPlane.x)
+        arr[i * 3 + 1] = modelCenter.y + radius * (c * baseDir.y + s * upInPlane.y)
+        arr[i * 3 + 2] = modelCenter.z + radius * (c * baseDir.z + s * upInPlane.z)
       }
     }
 
@@ -512,6 +524,9 @@ export function createViewer(
       }
     }
 
+    // Sync the vertical anchor to wherever the camera landed after model load.
+    verticalAnchorDir = camera.position.clone().sub(controls.target).normalize()
+
     rebuildAxisLines()
     emitChange()
   }
@@ -532,7 +547,17 @@ export function createViewer(
   }
 
   const setOrbitMode = (mode: OrbitMode) => {
+    if (mode === 'vertical' && currentOrbitMode !== 'vertical') {
+      // Capture the current camera-to-target direction as the fixed arc anchor.
+      // Subsequent viewer-camera orbits won't re-orient the arc, so the user
+      // can look at the arc from the side and see its 3D curvature.
+      verticalAnchorDir = camera.position.clone().sub(controls.target).normalize()
+    }
     currentOrbitMode = mode
+  }
+
+  const setOrbitDirection = (dir: OrbitDirection) => {
+    currentOrbitDir = dir
   }
 
   const onChange = (cb: (o: Orientation) => void) => {
@@ -559,7 +584,7 @@ export function createViewer(
     changeCbs.length = 0
   }
 
-  return { loadModel, setAxes, setExplodeScalar, setOrbitRange, setOrbitMode, getOrientation, onChange, getDebug, dispose }
+  return { loadModel, setAxes, setExplodeScalar, setOrbitRange, setOrbitMode, setOrbitDirection, getOrientation, onChange, getDebug, dispose }
 }
 
 function disposeObject(obj: Object3D) {

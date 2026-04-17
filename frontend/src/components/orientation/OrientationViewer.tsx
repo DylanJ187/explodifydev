@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { createViewer } from './createViewer'
-import type { Orientation, ViewerHandle, ViewerOptions, Vec3, AxisVariant, OrbitMode } from './createViewer'
+import type { Orientation, ViewerHandle, ViewerOptions, Vec3, AxisVariant, OrbitMode, OrbitDirection } from './createViewer'
 import './orientation.css'
 
 interface Props {
@@ -10,6 +10,7 @@ interface Props {
   explodeScalar: number
   orbitRangeDeg: number
   orbitMode?: OrbitMode
+  orbitDirection?: OrbitDirection
   onOrientationChange?: (o: Orientation) => void
   initialCameraDirection?: Vec3
 }
@@ -25,6 +26,7 @@ export function OrientationViewer({
   explodeScalar,
   orbitRangeDeg,
   orbitMode,
+  orbitDirection,
   onOrientationChange,
   initialCameraDirection,
 }: Props) {
@@ -90,6 +92,10 @@ export function OrientationViewer({
   useEffect(() => {
     if (orbitMode) viewerRef.current?.setOrbitMode(orbitMode)
   }, [orbitMode])
+
+  useEffect(() => {
+    if (orbitDirection !== undefined) viewerRef.current?.setOrbitDirection(orbitDirection)
+  }, [orbitDirection])
 
   return (
     <div className="ov-root">

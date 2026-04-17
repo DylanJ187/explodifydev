@@ -62,6 +62,7 @@ export async function createJob(
     selectedVariant: VariantName
     easingCurve: number[]
     orbitMode?: string
+    orbitDirection?: 1 | -1
     orbitEasingCurve?: number[]
     variantsToRender?: VariantName[]
   },
@@ -79,6 +80,9 @@ export async function createJob(
   form.append('easing_curve', JSON.stringify(options.easingCurve))
   if (options.orbitMode) {
     form.append('orbit_mode', options.orbitMode)
+  }
+  if (options.orbitDirection !== undefined) {
+    form.append('orbit_direction', String(options.orbitDirection))
   }
   if (options.orbitEasingCurve) {
     form.append('orbit_easing', JSON.stringify(options.orbitEasingCurve))

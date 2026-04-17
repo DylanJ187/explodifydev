@@ -3114,37 +3114,116 @@ input[type='range']::-moz-range-thumb {
   justify-content: center;
   width: 26px;
   height: 20px;
-  border: 1px solid rgba(0, 212, 255, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 4px;
-  background: rgba(0, 212, 255, 0.07);
-  color: rgba(0, 212, 255, 0.7);
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.5);
   flex-shrink: 0;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
   cursor: pointer;
 }
 
 .viewer-orbit-axis-btn:hover {
-  background: rgba(0, 212, 255, 0.15);
-  border-color: rgba(0, 212, 255, 0.55);
-  color: #00d4ff;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .viewer-orbit-axis-btn--vertical {
-  background: rgba(0, 212, 255, 0.14);
-  border-color: rgba(0, 212, 255, 0.6);
-  color: #00d4ff;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.3);
+  color: rgba(255, 255, 255, 0.75);
 }
 
-/* ─── Bottom-left overlay: flex column — preview above sliders ─── */
+/* ─── Bottom-left overlay: slider stack (now wider to fit inline axis buttons) ─── */
 .viewer-bottom-left {
   position: absolute;
   bottom: 20px;
   left: 16px;
   z-index: 10;
-  width: 190px;
+  width: 280px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* ─── Top-right overlay: first-frame preview (50% larger than original) ─── */
+.viewer-top-right {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 10;
+  width: 285px;
+}
+
+/* ─── Inline explosion-axis mini buttons (X / Y / Z) ─── */
+.viewer-explode-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.viewer-axis-mini-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+}
+
+.viewer-axis-mini-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 18px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+
+.viewer-axis-mini-btn:hover {
+  color: rgba(255, 255, 255, 0.85);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.viewer-axis-mini-btn--active {
+  background: rgba(212, 168, 67, 0.18);
+  border-color: rgba(212, 168, 67, 0.55);
+  color: var(--accent);
+}
+
+.viewer-axis-mini-btn--active:hover {
+  background: rgba(212, 168, 67, 0.24);
+}
+
+.viewer-axis-mini-btn--active-orbit {
+  background: rgba(0, 212, 255, 0.15);
+  border-color: rgba(0, 212, 255, 0.55);
+  color: #00d4ff;
+}
+
+.viewer-axis-mini-btn--active-orbit:hover {
+  background: rgba(0, 212, 255, 0.22);
+}
+
+.viewer-axis-mini-btn--swap {
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .pf-box {
@@ -3156,6 +3235,19 @@ input[type='range']::-moz-range-thumb {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   overflow: hidden;
+}
+
+.pf-label {
+  position: absolute;
+  top: 5px;
+  left: 7px;
+  z-index: 2;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.45);
+  text-transform: uppercase;
+  pointer-events: none;
 }
 
 .pf-img {

@@ -4,8 +4,9 @@ import { useRef, useCallback, useEffect, useState } from 'react'
 const T_STEPS = [0, 0.25, 0.5, 0.75, 1.0]
 
 // ─── Presets ──────────────────────────────────────────────────────────────────
-// Samples represent velocity (speed multiplier) at t=[0, 0.25, 0.5, 0.75, 1.0].
-// Backend integrates these to derive actual position — preventing reversal.
+// Samples are POSITION (% exploded / % orbit completed) at t=[0, 0.25, 0.5, 0.75, 1.0].
+// The curve is a direct ramp from 0 to 1 — backend interpolates samples as-is.
+// Speed at any instant = |gradient| of the ramp (flat = paused, steep = fast).
 
 interface Preset {
   id: string
@@ -14,24 +15,26 @@ interface Preset {
 }
 
 const PRESETS: Preset[] = [
-  { id: 'linear',    label: 'Linear',    samples: [1.0,  1.0,  1.0,  1.0,  1.0]  },
-  { id: 'cinematic', label: 'Cinematic', samples: [1.8,  1.4,  0.9,  0.4,  0.1]  },
-  { id: 'snap',      label: 'Snap',      samples: [2.0,  1.8,  0.4,  0.05, 0.0]  },
-  { id: 'ease-in',   label: 'Ease In',   samples: [0.1,  0.5,  1.0,  1.6,  2.0]  },
-  { id: 'surge',     label: 'Surge',     samples: [0.8,  2.0,  1.8,  0.6,  0.05] },
+  { id: 'linear',    label: 'Linear',    samples: [0.00, 0.25, 0.50, 0.75, 1.00] },
+  { id: 'cinematic', label: 'Cinematic', samples: [0.00, 0.08, 0.50, 0.92, 1.00] },
+  { id: 'snap',      label: 'Snap',      samples: [0.00, 0.70, 0.95, 0.99, 1.00] },
+  { id: 'ease-in',   label: 'Ease In',   samples: [0.00, 0.05, 0.20, 0.55, 1.00] },
+  { id: 'surge',     label: 'Surge',     samples: [0.00, 0.40, 0.60, 0.75, 1.00] },
 ]
 
-// Orbit-specific presets — camera motion semantics differ from explosion motion.
-// Cinematic (symmetric S-curve) is the recommended default for camera orbit per ad-quality guidelines.
+// Orbit-specific presets — same semantics (% orbit completed at each time point).
+// Cinematic is a smooth S-curve — recommended default for ad-quality renders.
 export const ORBIT_EASING_PRESETS: Preset[] = [
-  { id: 'linear',    label: 'Linear',    samples: [1.0,  1.0,  1.0,  1.0,  1.0]  },
-  { id: 'cinematic', label: 'Cinematic', samples: [0.6,  1.2,  1.5,  1.2,  0.6]  },
-  { id: 'ease-out',  label: 'Ease Out',  samples: [1.6,  1.3,  1.0,  0.5,  0.1]  },
-  { id: 'ease-in',   label: 'Ease In',   samples: [0.1,  0.5,  1.0,  1.3,  1.6]  },
-  { id: 'snap',      label: 'Snap',      samples: [1.8,  0.9,  0.4,  0.2,  0.05] },
+  { id: 'linear',    label: 'Linear',    samples: [0.00, 0.25, 0.50, 0.75, 1.00] },
+  { id: 'cinematic', label: 'Cinematic', samples: [0.00, 0.15, 0.50, 0.85, 1.00] },
+  { id: 'ease-out',  label: 'Ease Out',  samples: [0.00, 0.40, 0.70, 0.90, 1.00] },
+  { id: 'ease-in',   label: 'Ease In',   samples: [0.00, 0.10, 0.30, 0.60, 1.00] },
+  { id: 'snap',      label: 'Snap',      samples: [0.00, 0.60, 0.90, 0.98, 1.00] },
 ]
 
 export const DEFAULT_EQ_SAMPLES: number[] = [...PRESETS[0].samples]
+export const CINEMATIC_EXPLOSION_SAMPLES: number[] = [...PRESETS.find(p => p.id === 'cinematic')!.samples]
+export const CINEMATIC_ORBIT_SAMPLES: number[] = [...ORBIT_EASING_PRESETS.find(p => p.id === 'cinematic')!.samples]
 
 // ─── SVG coordinate system ────────────────────────────────────────────────────
 
@@ -44,10 +47,10 @@ const PW    = VW - PX - PR
 const PH    = 120   // plot height
 const XLY   = PY + PH + 16  // x-label y-position
 
-// Y axis represents velocity (speed multiplier). Clamped to [0, Y_HI].
-// Range 0–2 places the 1× reference line at the visual midpoint.
+// Y axis represents % exploded (or % orbit completed) — position, not velocity.
+// The curve is a direct ramp from 0 to 1 (0% to 100%).
 const Y_LO = 0
-const Y_HI  = 2.0
+const Y_HI  = 1.0
 
 function tToSX(t: number)  { return PX + t * PW }
 function yToSY(y: number)  { return PY + (1 - (y - Y_LO) / (Y_HI - Y_LO)) * PH }
@@ -86,9 +89,9 @@ function matchPresetFrom(list: Preset[], samples: number[]): string | null {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const Y_REFS = [
-  { y: 2.0, label: '2×' },
-  { y: 1.0, label: '1×' },
-  { y: 0,   label: '0'  },
+  { y: 1.0, label: '100%' },
+  { y: 0.5, label: '50%'  },
+  { y: 0,   label: '0'    },
 ]
 
 const X_LABELS = ['Start', '25%', 'Mid', '75%', 'End']

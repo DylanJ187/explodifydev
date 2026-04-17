@@ -64,6 +64,7 @@ export function PreviewFrame({ previewId, cameraDirection }: Props) {
 
   return (
     <div className="pf-box">
+      <div className="pf-label">FIRST FRAME</div>
       {src && (
         <img
           src={src}

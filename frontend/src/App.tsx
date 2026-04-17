@@ -2,8 +2,8 @@
 import { useState, useEffect, useRef } from 'react'
 import { UploadZone } from './components/UploadZone'
 import { StylePanel } from './components/StylePanel'
-import { EasingEditor, DEFAULT_EQ_SAMPLES, ORBIT_EASING_PRESETS } from './components/EasingEditor'
-import type { OrbitMode } from './components/orientation/createViewer'
+import { EasingEditor, ORBIT_EASING_PRESETS, CINEMATIC_EXPLOSION_SAMPLES, CINEMATIC_ORBIT_SAMPLES } from './components/EasingEditor'
+import type { OrbitMode, OrbitDirection } from './components/orientation/createViewer'
 import { MeshViewer } from './components/MeshViewer'
 import type { MeshViewerHandle } from './components/MeshViewer'
 import { IdleOutput } from './components/IdleOutput'
@@ -40,7 +40,8 @@ const DEFAULT_STYLE: StyleOptions = {
   prompt: '',
 }
 
-const DEFAULT_EASING = DEFAULT_EQ_SAMPLES
+const DEFAULT_EASING = CINEMATIC_EXPLOSION_SAMPLES
+const DEFAULT_ORBIT_EASING = CINEMATIC_ORBIT_SAMPLES
 
 export default function App() {
   const [state, setState] = useState<AppState>('idle')
@@ -56,8 +57,9 @@ export default function App() {
   const [selectedVariant, setSelectedVariant] = useState<VariantName>('y')
   const [easingCurve, setEasingCurve] = useState<number[]>(DEFAULT_EASING)
   const [orbitMode, setOrbitMode] = useState<OrbitMode>('horizontal')
-  const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(DEFAULT_EASING)
-  const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode } | null>(null)
+  const [orbitDirection, setOrbitDirection] = useState<OrbitDirection>(1)
+  const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(DEFAULT_ORBIT_EASING)
+  const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode; orbitDirection: OrbitDirection } | null>(null)
   const [restyleStack, setRestyleStack] = useState<RestyleEntry[]>([])
   const [cameraDirection, setCameraDirection] = useState<[number, number, number]>([0.3, 0.3, 1.0])
   const meshViewerRef = useRef<MeshViewerHandle | null>(null)
@@ -70,7 +72,8 @@ export default function App() {
     renderedSettings.explodeScalar !== explodeScalar ||
     renderedSettings.orbitRangeDeg !== orbitRangeDeg ||
     renderedSettings.cameraZoom !== cameraZoom ||
-    renderedSettings.orbitMode !== orbitMode
+    renderedSettings.orbitMode !== orbitMode ||
+    renderedSettings.orbitDirection !== orbitDirection
   )
 
   async function handleUpload(file: File) {
@@ -114,12 +117,13 @@ export default function App() {
         selectedVariant,
         easingCurve,
         orbitMode,
+        orbitDirection,
         orbitEasingCurve,
         variantsToRender,
       })
       setJobId(id)
       setJobStatus(null)
-      setRenderedSettings({ explodeScalar, orbitRangeDeg, cameraZoom, orbitMode })
+      setRenderedSettings({ explodeScalar, orbitRangeDeg, cameraZoom, orbitMode, orbitDirection })
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Job creation failed')
       setState('error')
@@ -225,7 +229,8 @@ export default function App() {
     setSelectedVariant('y')
     setEasingCurve(DEFAULT_EASING)
     setOrbitMode('horizontal')
-    setOrbitEasingCurve(DEFAULT_EASING)
+    setOrbitDirection(1)
+    setOrbitEasingCurve(DEFAULT_ORBIT_EASING)
     setRenderedSettings(null)
     setErrorMsg(null)
     setRestyleStack([])
@@ -387,6 +392,8 @@ export default function App() {
             onOrbitRangeChange={setOrbitRangeDeg}
             orbitMode={orbitMode}
             onOrbitModeChange={setOrbitMode}
+            orbitDirection={orbitDirection}
+            onOrbitDirectionChange={setOrbitDirection}
             cameraDirection={cameraDirection}
             onCameraDirectionChange={setCameraDirection}
             initialCameraDirection={lastSubmittedDirection.current}

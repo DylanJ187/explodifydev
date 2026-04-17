@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { ExplosionAxes, VariantName, FaceName } from '../api/client'
 import { OrientationViewer } from './orientation/OrientationViewer'
-import type { Orientation, Vec3, OrbitMode } from './orientation/createViewer'
+import type { Orientation, Vec3, OrbitMode, OrbitDirection } from './orientation/createViewer'
 import { PreviewFrame } from './PreviewFrame'
 
 const THREE_D_FORMATS = ['glb', 'gltf', 'obj']
@@ -23,6 +23,8 @@ interface Props {
   onOrbitRangeChange: (v: number) => void
   orbitMode: OrbitMode
   onOrbitModeChange: (mode: OrbitMode) => void
+  orbitDirection: OrbitDirection
+  onOrbitDirectionChange: (dir: OrbitDirection) => void
   cameraDirection?: Vec3
   onCameraDirectionChange?: (dir: Vec3) => void
   initialCameraDirection?: Vec3
@@ -56,6 +58,8 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
   onOrbitRangeChange,
   orbitMode,
   onOrbitModeChange,
+  orbitDirection,
+  onOrbitDirectionChange,
   cameraDirection,
   onCameraDirectionChange,
   initialCameraDirection,
@@ -113,12 +117,6 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
     onChangeCbRef.current?.(o)
   })
 
-  const axisLabel = (a: VariantName) => {
-    if (a === 'x') return 'X Axis'
-    if (a === 'y') return 'Y Axis'
-    return 'Z Axis'
-  }
-
   const show3D = is3D && !forceStatic
 
   // Progress percentage for slider fill styling
@@ -136,6 +134,7 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
             explodeScalar={explodeScalar}
             orbitRangeDeg={orbitRangeDeg}
             orbitMode={orbitMode}
+            orbitDirection={orbitDirection}
             onOrientationChange={stableOrientationCb.current}
             initialCameraDirection={initialCameraDirection}
           />
@@ -143,24 +142,10 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
           <StaticPreview imageSrc={previewImages['front']} fileName={file.name} />
         )}
 
-        {/* Axis selector — top right */}
-        {explosionAxes && (
-          <div className="mesh-viewer-axis-overlay">
-            <div className="mesh-viewer-axis-title">Explosion Axis</div>
-            {(['x', 'y', 'z'] as VariantName[]).map((axis) => (
-              <button
-                key={axis}
-                className={[
-                  'mesh-axis-btn',
-                  `mesh-axis-btn--${axis}`,
-                  selectedAxis === axis ? 'mesh-axis-btn--active' : '',
-                ].filter(Boolean).join(' ')}
-                onClick={() => onAxisChange(axis)}
-              >
-                <span className="mesh-axis-indicator" />
-                <span className="mesh-axis-name">{axisLabel(axis)}</span>
-              </button>
-            ))}
+        {/* Preview frame — top right (moved from bottom-left) */}
+        {previewId && cameraDirection && (
+          <div className="viewer-top-right">
+            <PreviewFrame previewId={previewId} cameraDirection={cameraDirection} />
           </div>
         )}
 
@@ -172,17 +157,35 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
           </button>
         )}
 
-        {/* Bottom-left overlay: preview frame (above) + sliders (below) */}
+        {/* Bottom-left overlay: sliders with inline axis controls */}
         <div className="viewer-bottom-left">
-          {previewId && cameraDirection && (
-            <PreviewFrame previewId={previewId} cameraDirection={cameraDirection} />
-          )}
-        {/* Sliders */}
         <div className="viewer-sliders">
           <div className="viewer-slider-row">
             <div className="viewer-slider-header">
               <span className="viewer-slider-label" style={{ color: '#f5a623' }}>Explosion Level</span>
-              <span className="viewer-slider-value" style={{ color: '#f5a623' }}>{explodeScalar.toFixed(1)}×</span>
+              <div className="viewer-explode-controls">
+                <span className="viewer-slider-value" style={{ color: '#f5a623' }}>{explodeScalar.toFixed(1)}×</span>
+                {explosionAxes && (
+                  <div className="viewer-axis-mini-group" role="radiogroup" aria-label="Explosion axis">
+                    {(['x', 'y', 'z'] as VariantName[]).map((axis) => (
+                      <button
+                        key={axis}
+                        type="button"
+                        role="radio"
+                        aria-checked={selectedAxis === axis}
+                        className={[
+                          'viewer-axis-mini-btn',
+                          selectedAxis === axis ? 'viewer-axis-mini-btn--active' : '',
+                        ].filter(Boolean).join(' ')}
+                        onClick={() => onAxisChange(axis)}
+                        title={`Explosion axis: ${axis.toUpperCase()}`}
+                      >
+                        {axis.toUpperCase()}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <input
               type="range"
@@ -199,27 +202,46 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
               <span className="viewer-slider-label" style={{ color: '#00d4ff' }}>Camera Orbit</span>
               <div className="viewer-orbit-controls">
                 <span className="viewer-slider-value" style={{ color: '#00d4ff' }}>{orbitRangeDeg}°</span>
-                <button
-                  className={`viewer-orbit-axis-btn${orbitMode === 'vertical' ? ' viewer-orbit-axis-btn--vertical' : ''}`}
-                  onClick={() => onOrbitModeChange(orbitMode === 'horizontal' ? 'vertical' : 'horizontal')}
-                  title={orbitMode === 'horizontal'
-                    ? 'Horizontal orbit (turntable). Click to switch to Vertical (crane).'
-                    : 'Vertical orbit (crane). Click to switch to Horizontal (turntable).'}
-                  aria-pressed={orbitMode === 'vertical'}
-                  aria-label={`Orbit axis: ${orbitMode}`}
-                >
-                  {orbitMode === 'horizontal' ? (
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                      <ellipse cx="7" cy="9" rx="5" ry="2.2" stroke="currentColor" strokeWidth="1.4" strokeDasharray="3 2"/>
-                      <path d="M11.5 7.8 L12.5 9.2 L10.2 9.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                <div className="viewer-axis-mini-group" role="group" aria-label="Orbit controls">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={orbitMode === 'horizontal'}
+                    className={[
+                      'viewer-axis-mini-btn',
+                      orbitMode === 'horizontal' ? 'viewer-axis-mini-btn--active-orbit' : '',
+                    ].filter(Boolean).join(' ')}
+                    onClick={() => onOrbitModeChange('horizontal')}
+                    title="Horizontal orbit (turntable)"
+                  >
+                    X
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={orbitMode === 'vertical'}
+                    className={[
+                      'viewer-axis-mini-btn',
+                      orbitMode === 'vertical' ? 'viewer-axis-mini-btn--active-orbit' : '',
+                    ].filter(Boolean).join(' ')}
+                    onClick={() => onOrbitModeChange('vertical')}
+                    title="Vertical orbit (crane)"
+                  >
+                    Y
+                  </button>
+                  <button
+                    type="button"
+                    className="viewer-axis-mini-btn viewer-axis-mini-btn--swap"
+                    onClick={() => onOrbitDirectionChange(orbitDirection === 1 ? -1 : 1)}
+                    title="Reverse orbit direction"
+                    aria-label="Reverse orbit direction"
+                  >
+                    <svg width="11" height="11" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                      <path d="M10 4H4M4 4L6.5 2M4 4L6.5 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
+                      <path d="M4 10H10M10 10L7.5 8M10 10L7.5 12" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round"/>
                     </svg>
-                  ) : (
-                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
-                      <path d="M7 12.5 C4 12.5 2 10.2 2 7 C2 3.8 4 1.5 7 1.5" stroke="currentColor" strokeWidth="1.4" strokeDasharray="3 2" strokeLinecap="round" fill="none"/>
-                      <path d="M7 1.5 L5.2 3.8 M7 1.5 L8.8 3.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none"/>
-                    </svg>
-                  )}
-                </button>
+                  </button>
+                </div>
               </div>
             </div>
             <input
