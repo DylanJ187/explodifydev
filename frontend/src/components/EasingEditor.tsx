@@ -21,6 +21,16 @@ const PRESETS: Preset[] = [
   { id: 'surge',     label: 'Surge',     samples: [0.8,  2.0,  1.8,  0.6,  0.05] },
 ]
 
+// Orbit-specific presets — camera motion semantics differ from explosion motion.
+// Cinematic (symmetric S-curve) is the recommended default for camera orbit per ad-quality guidelines.
+export const ORBIT_EASING_PRESETS: Preset[] = [
+  { id: 'linear',    label: 'Linear',    samples: [1.0,  1.0,  1.0,  1.0,  1.0]  },
+  { id: 'cinematic', label: 'Cinematic', samples: [0.6,  1.2,  1.5,  1.2,  0.6]  },
+  { id: 'ease-out',  label: 'Ease Out',  samples: [1.6,  1.3,  1.0,  0.5,  0.1]  },
+  { id: 'ease-in',   label: 'Ease In',   samples: [0.1,  0.5,  1.0,  1.3,  1.6]  },
+  { id: 'snap',      label: 'Snap',      samples: [1.8,  0.9,  0.4,  0.2,  0.05] },
+]
+
 export const DEFAULT_EQ_SAMPLES: number[] = [...PRESETS[0].samples]
 
 // ─── SVG coordinate system ────────────────────────────────────────────────────
@@ -66,9 +76,9 @@ function catmullRomPath(pts: [number, number][]): string {
 
 // ─── Preset matching ──────────────────────────────────────────────────────────
 
-function matchPreset(samples: number[]): string | null {
+function matchPresetFrom(list: Preset[], samples: number[]): string | null {
   if (samples.length !== 5) return null
-  return PRESETS.find(p =>
+  return list.find(p =>
     p.samples.every((v, i) => Math.abs((samples[i] ?? 0) - v) < 0.005)
   )?.id ?? null
 }
@@ -90,18 +100,20 @@ interface Props {
   onChange: (samples: number[]) => void
   disabled?: boolean
   compact?: boolean
+  presets?: Preset[]
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function EasingEditor({ value, onChange, disabled, compact }: Props) {
+export function EasingEditor({ value, onChange, disabled, compact, presets: customPresets }: Props) {
+  const activePresetList = customPresets ?? PRESETS
   const samples       = value.length === 5 ? value : DEFAULT_EQ_SAMPLES
   const svgRef        = useRef<SVGSVGElement>(null)
   const dragIdx       = useRef<number | null>(null)
   const dropdownRef   = useRef<HTMLDivElement>(null)
   const [dropOpen, setDropOpen] = useState(false)
 
-  const activePreset = matchPreset(samples)
+  const activePreset = matchPresetFrom(activePresetList, samples)
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -163,7 +175,7 @@ export function EasingEditor({ value, onChange, disabled, compact }: Props) {
             disabled={disabled}
             onClick={() => !disabled && setDropOpen(o => !o)}
           >
-            <span>{activePreset ? PRESETS.find(p => p.id === activePreset)?.label : 'Custom'}</span>
+            <span>{activePreset ? activePresetList.find(p => p.id === activePreset)?.label : 'Custom'}</span>
             <svg className="eq-chevron" viewBox="0 0 10 6" fill="none" aria-hidden="true">
               <path d="M1 1l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
@@ -179,7 +191,7 @@ export function EasingEditor({ value, onChange, disabled, compact }: Props) {
                   Custom
                 </button>
               )}
-              {PRESETS.map(p => (
+              {activePresetList.map(p => (
                 <button
                   key={p.id}
                   type="button"

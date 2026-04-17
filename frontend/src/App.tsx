@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { UploadZone } from './components/UploadZone'
 import { StylePanel } from './components/StylePanel'
-import { EasingEditor, DEFAULT_EQ_SAMPLES } from './components/EasingEditor'
+import { EasingEditor, DEFAULT_EQ_SAMPLES, ORBIT_EASING_PRESETS } from './components/EasingEditor'
 import type { OrbitMode } from './components/orientation/createViewer'
 import { MeshViewer } from './components/MeshViewer'
 import type { MeshViewerHandle } from './components/MeshViewer'
@@ -276,14 +276,26 @@ export default function App() {
               </section>
 
               {state === 'orientation' && (
-                <section className="panel-section animate-fade-in">
-                  <div className="section-label">Explosion Profile</div>
-                  <EasingEditor
-                    value={easingCurve}
-                    onChange={setEasingCurve}
-                    disabled={false}
-                  />
-                </section>
+                <>
+                  <section className="panel-section animate-fade-in">
+                    <div className="section-label">Explosion Profile</div>
+                    <EasingEditor
+                      value={easingCurve}
+                      onChange={setEasingCurve}
+                      disabled={false}
+                    />
+                  </section>
+
+                  <section className="panel-section animate-fade-in">
+                    <div className="section-label">Camera Orbit Easing</div>
+                    <EasingEditor
+                      value={orbitEasingCurve}
+                      onChange={setOrbitEasingCurve}
+                      disabled={false}
+                      presets={ORBIT_EASING_PRESETS}
+                    />
+                  </section>
+                </>
               )}
 
               {state === 'processing' && (
@@ -375,8 +387,7 @@ export default function App() {
             onOrbitRangeChange={setOrbitRangeDeg}
             orbitMode={orbitMode}
             onOrbitModeChange={setOrbitMode}
-            orbitEasingCurve={orbitEasingCurve}
-            onOrbitEasingChange={setOrbitEasingCurve}
+            cameraDirection={cameraDirection}
             onCameraDirectionChange={setCameraDirection}
             initialCameraDirection={lastSubmittedDirection.current}
             onGenerate={() => handleGenerate()}

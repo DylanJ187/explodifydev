@@ -182,7 +182,8 @@ export function createViewer(
     color: 0x00d4ff,
     depthTest: false,
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.92,
+    linewidth: 2,
   })
   const orbitArcLine = new Line(orbitArcGeom, orbitArcMat)
   orbitArcLine.renderOrder = 998
@@ -325,8 +326,8 @@ export function createViewer(
         new Vector3(tx / tLen, ty / tLen, tz / tLen),
       )
       // Scale proportional to modelDiagonal so it looks right at any zoom.
-      const cr = modelDiagonal * 0.025
-      const ch = modelDiagonal * 0.07
+      const cr = modelDiagonal * 0.012
+      const ch = modelDiagonal * 0.038
       arrowCone.scale.set(cr, ch, cr)
     }
   }
@@ -394,10 +395,33 @@ export function createViewer(
     geom.setAttribute('position', new Float32BufferAttribute(
       [start.x, start.y, start.z, end.x, end.y, end.z], 3,
     ))
-    const mat = new LineBasicMaterial({ color: 0xd4a843, depthTest: false, transparent: true })
+    const mat = new LineBasicMaterial({
+      color: 0xd4a843,
+      depthTest: false,
+      transparent: true,
+      opacity: 0.92,
+      linewidth: 2,
+    })
     const line = new Line(geom, mat)
     line.renderOrder = 999
     axisGroup.add(line)
+
+    // Arrow cones at both ends of the axis line
+    const arrowR = modelDiagonal * 0.012
+    const arrowH = modelDiagonal * 0.038
+    const makeAxisCone = (pos: Vector3, pointDir: Vector3) => {
+      const cone = new Mesh(
+        new ConeGeometry(1, 1, 8),
+        new MeshBasicMaterial({ color: 0xd4a843, depthTest: false, transparent: true, opacity: 0.92 }),
+      )
+      cone.renderOrder = 999
+      cone.position.copy(pos)
+      cone.quaternion.setFromUnitVectors(new Vector3(0, 1, 0), pointDir)
+      cone.scale.set(arrowR, arrowH, arrowR)
+      return cone
+    }
+    axisGroup.add(makeAxisCone(end, dir))
+    axisGroup.add(makeAxisCone(start, dir.clone().negate()))
   }
 
   const fitCameraToModel = (root: Object3D) => {

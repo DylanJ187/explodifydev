@@ -2746,16 +2746,11 @@ input[type='range']::-moz-range-thumb {
   object-fit: contain;
 }
 
-/* ─── Viewer sliders overlay (bottom-left) ─── */
+/* ─── Viewer sliders panel (inside .viewer-bottom-left) ─── */
 .viewer-sliders {
-  position: absolute;
-  bottom: 20px;
-  left: 16px;
-  z-index: 10;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  width: 190px;
   padding: 12px 14px;
   background: rgba(8, 8, 8, 0.75);
   backdrop-filter: blur(8px);
@@ -2842,45 +2837,7 @@ input[type='range']::-moz-range-thumb {
 }
 
 /* ─── Orbit mode H/V toggle ─── */
-.viewer-orbit-mode {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-top: 6px;
-}
-
-.viewer-mode-btn {
-  width: 26px;
-  height: 20px;
-  border: 1px solid rgba(0, 212, 255, 0.3);
-  border-radius: 3px;
-  background: transparent;
-  color: rgba(0, 212, 255, 0.55);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s, border-color 0.15s;
-}
-
-.viewer-mode-btn:hover {
-  border-color: rgba(0, 212, 255, 0.6);
-  color: rgba(0, 212, 255, 0.85);
-}
-
-.viewer-mode-btn--active {
-  background: rgba(0, 212, 255, 0.15);
-  border-color: #00d4ff;
-  color: #00d4ff;
-}
-
-.viewer-mode-label {
-  font-size: 10px;
-  color: rgba(0, 212, 255, 0.5);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  margin-left: 2px;
-}
+/* .viewer-mode-btn / .viewer-mode-label removed — replaced by .viewer-orbit-axis-btn */
 
 /* ─── Canvas action button (bottom-right overlay, shared by viewer + video) ─── */
 .viewer-action-btn {
@@ -3142,6 +3099,111 @@ input[type='range']::-moz-range-thumb {
 .eq-dot {
   fill: #ffffff;
   filter: drop-shadow(0 1px 4px rgba(0,0,0,0.8));
+}
+
+/* ─── Orbit axis toggle button ─── */
+.viewer-orbit-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.viewer-orbit-axis-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 20px;
+  border: 1px solid rgba(0, 212, 255, 0.3);
+  border-radius: 4px;
+  background: rgba(0, 212, 255, 0.07);
+  color: rgba(0, 212, 255, 0.7);
+  flex-shrink: 0;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  cursor: pointer;
+}
+
+.viewer-orbit-axis-btn:hover {
+  background: rgba(0, 212, 255, 0.15);
+  border-color: rgba(0, 212, 255, 0.55);
+  color: #00d4ff;
+}
+
+.viewer-orbit-axis-btn--vertical {
+  background: rgba(0, 212, 255, 0.14);
+  border-color: rgba(0, 212, 255, 0.6);
+  color: #00d4ff;
+}
+
+/* ─── Bottom-left overlay: flex column — preview above sliders ─── */
+.viewer-bottom-left {
+  position: absolute;
+  bottom: 20px;
+  left: 16px;
+  z-index: 10;
+  width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pf-box {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: rgba(8, 8, 8, 0.8);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.pf-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 5px;
+}
+
+.pf-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.pf-placeholder--error {
+  color: var(--error);
+  opacity: 0.6;
+}
+
+.pf-spinner-wrap {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 8, 8, 0.35);
+}
+
+.pf-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  border-top-color: rgba(255, 255, 255, 0.55);
+  border-radius: 50%;
+  animation: pf-spin 0.7s linear infinite;
+}
+
+@keyframes pf-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ─── Review gate (simplified single-variant) ─── */

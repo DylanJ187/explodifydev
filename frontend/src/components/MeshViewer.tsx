@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState }
 import type { ExplosionAxes, VariantName, FaceName } from '../api/client'
 import { OrientationViewer } from './orientation/OrientationViewer'
 import type { Orientation, Vec3, OrbitMode } from './orientation/createViewer'
-import { EasingEditor } from './EasingEditor'
+import { PreviewFrame } from './PreviewFrame'
 
 const THREE_D_FORMATS = ['glb', 'gltf', 'obj']
 
@@ -23,8 +23,7 @@ interface Props {
   onOrbitRangeChange: (v: number) => void
   orbitMode: OrbitMode
   onOrbitModeChange: (mode: OrbitMode) => void
-  orbitEasingCurve: number[]
-  onOrbitEasingChange: (v: number[]) => void
+  cameraDirection?: Vec3
   onCameraDirectionChange?: (dir: Vec3) => void
   initialCameraDirection?: Vec3
   onGenerate?: () => void
@@ -57,8 +56,7 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
   onOrbitRangeChange,
   orbitMode,
   onOrbitModeChange,
-  orbitEasingCurve,
-  onOrbitEasingChange,
+  cameraDirection,
   onCameraDirectionChange,
   initialCameraDirection,
   onGenerate,
@@ -174,7 +172,12 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
           </button>
         )}
 
-        {/* Sliders — bottom left */}
+        {/* Bottom-left overlay: preview frame (above) + sliders (below) */}
+        <div className="viewer-bottom-left">
+          {previewId && cameraDirection && (
+            <PreviewFrame previewId={previewId} cameraDirection={cameraDirection} />
+          )}
+        {/* Sliders */}
         <div className="viewer-sliders">
           <div className="viewer-slider-row">
             <div className="viewer-slider-header">
@@ -194,7 +197,30 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
           <div className="viewer-slider-row">
             <div className="viewer-slider-header">
               <span className="viewer-slider-label" style={{ color: '#00d4ff' }}>Camera Orbit</span>
-              <span className="viewer-slider-value" style={{ color: '#00d4ff' }}>{orbitRangeDeg}°</span>
+              <div className="viewer-orbit-controls">
+                <span className="viewer-slider-value" style={{ color: '#00d4ff' }}>{orbitRangeDeg}°</span>
+                <button
+                  className={`viewer-orbit-axis-btn${orbitMode === 'vertical' ? ' viewer-orbit-axis-btn--vertical' : ''}`}
+                  onClick={() => onOrbitModeChange(orbitMode === 'horizontal' ? 'vertical' : 'horizontal')}
+                  title={orbitMode === 'horizontal'
+                    ? 'Horizontal orbit (turntable). Click to switch to Vertical (crane).'
+                    : 'Vertical orbit (crane). Click to switch to Horizontal (turntable).'}
+                  aria-pressed={orbitMode === 'vertical'}
+                  aria-label={`Orbit axis: ${orbitMode}`}
+                >
+                  {orbitMode === 'horizontal' ? (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                      <ellipse cx="7" cy="9" rx="5" ry="2.2" stroke="currentColor" strokeWidth="1.4" strokeDasharray="3 2"/>
+                      <path d="M11.5 7.8 L12.5 9.2 L10.2 9.7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+                    </svg>
+                  ) : (
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+                      <path d="M7 12.5 C4 12.5 2 10.2 2 7 C2 3.8 4 1.5 7 1.5" stroke="currentColor" strokeWidth="1.4" strokeDasharray="3 2" strokeLinecap="round" fill="none"/>
+                      <path d="M7 1.5 L5.2 3.8 M7 1.5 L8.8 3.8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none"/>
+                    </svg>
+                  )}
+                </button>
+              </div>
             </div>
             <input
               type="range"
@@ -204,37 +230,9 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
               style={{ '--pct': `${orbitPct}%` } as React.CSSProperties}
               onChange={e => onOrbitRangeChange(parseInt(e.target.value))}
             />
-            <div className="viewer-orbit-mode">
-              <button
-                className={`viewer-mode-btn${orbitMode === 'horizontal' ? ' viewer-mode-btn--active' : ''}`}
-                onClick={() => onOrbitModeChange('horizontal')}
-              >
-                H
-              </button>
-              <button
-                className={`viewer-mode-btn${orbitMode === 'vertical' ? ' viewer-mode-btn--active' : ''}`}
-                onClick={() => onOrbitModeChange('vertical')}
-              >
-                V
-              </button>
-              <span className="viewer-mode-label">
-                {orbitMode === 'horizontal' ? 'Horizontal' : 'Vertical'}
-              </span>
-            </div>
-          </div>
-
-          <div className="viewer-slider-row">
-            <div className="viewer-slider-header">
-              <span className="viewer-slider-label" style={{ color: '#00d4ff' }}>Orbit Easing</span>
-            </div>
-            <EasingEditor
-              value={orbitEasingCurve}
-              onChange={onOrbitEasingChange}
-              disabled={false}
-              compact
-            />
           </div>
         </div>
+        </div>{/* /viewer-bottom-left */}
       </div>
     </div>
   )

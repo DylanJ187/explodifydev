@@ -120,6 +120,22 @@ export async function restyleJob(
   return data.job_id as string
 }
 
+export async function fetchPreviewFrame(
+  options: {
+    previewId: string
+    cameraDirection: [number, number, number]
+  },
+  signal?: AbortSignal,
+): Promise<string> {
+  const form = new FormData()
+  form.append('preview_id', options.previewId)
+  form.append('camera_direction', JSON.stringify(options.cameraDirection))
+  const resp = await fetch('/preview/frame', { method: 'POST', body: form, signal })
+  if (!resp.ok) throw new Error(`Preview frame render failed: ${resp.statusText}`)
+  const blob = await resp.blob()
+  return URL.createObjectURL(blob)
+}
+
 export async function approvePhase4(
   jobId: string,
   selectedVariants: VariantName[],

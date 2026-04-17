@@ -9,7 +9,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 import backend.jobs as jobs
 from backend.models import JobStatus
@@ -90,6 +90,73 @@ async def preview_orientations(file: UploadFile = File(...)):
         "component_names": component_names,
         "explosion_axes": explosion_axes,
     }
+
+
+@app.post("/preview/frame")
+async def get_preview_frame_endpoint(
+    preview_id: str = Form(...),
+    camera_direction: Optional[str] = Form(None),
+):
+    """Render a single frame (t=0, no explosion) for the live preview box.
+
+    Returns a PNG image from the current camera direction. Used by the
+    frontend PreviewFrame component to show a live first-frame preview
+    as the user adjusts camera angle.
+    """
+    matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="Preview not found -- re-upload the file.")
+
+    # Prefer the source file (non-GLB) for full geometry fidelity.
+    # The viewer GLB is excluded since it is reoriented; use the non-viewer
+    # non-GLB source when available.
+    source_file = next(
+        (m for m in matches if not m.name.endswith("_viewer.glb")),
+        matches[0],
+    )
+
+    cam_dir_vec: list[float] | None = None
+    if camera_direction:
+        import json as _json
+        try:
+            parsed = _json.loads(camera_direction)
+            if isinstance(parsed, list) and len(parsed) == 3:
+                cam_dir_vec = [float(v) for v in parsed]
+        except Exception:
+            pass
+
+    try:
+        from pipeline.format_loader import load_assembly
+        from pipeline.phase1_geometry import GeometryAnalyzer
+        from pipeline.phase2_snapshots import SnapshotRenderer
+        import io
+        import numpy as np
+
+        named_meshes = load_assembly(str(source_file))
+        analyzer = GeometryAnalyzer()
+        named_meshes = analyzer.reorient(named_meshes)
+        meshes = [nm.mesh for nm in named_meshes]
+
+        if cam_dir_vec is not None:
+            arr = np.array(cam_dir_vec, dtype=np.float64)
+            norm = float(np.linalg.norm(arr))
+            cam_dir = arr / norm if norm > 1e-6 else np.array([0.3, 0.3, 1.0])
+        else:
+            cam_dir = np.array([0.3, 0.3, 1.0])
+
+        renderer = SnapshotRenderer()
+        img = renderer._render_scene(
+            meshes, cam_dir,
+            orbit_deg=0.0,
+            up_rotation_deg=0.0,
+            resolution=(480, 270),
+        )
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return Response(content=buf.getvalue(), media_type="image/png")
+
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Frame render failed: {exc}")
 
 
 @app.get("/preview/{preview_id}/mesh.glb")
