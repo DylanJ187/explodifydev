@@ -1,24 +1,63 @@
-// TODO: Terminal B will ship real impl
-export default function LandingPage() {
+import { MeshBackground } from '../components/shell/MeshBackground'
+import { Hero } from '../components/landing/Hero'
+import { PipelineScrolly } from '../components/landing/PipelineScrolly'
+import { Features } from '../components/landing/Features'
+import { CTACard } from '../components/landing/CTACard'
+
+export function LandingPage() {
   return (
-    <div style={{ background: '#080808', minHeight: '100vh', color: '#e8e8e8', padding: 48 }}>
-      <h1 style={{ fontSize: 32, letterSpacing: '-0.02em' }}>Explodify</h1>
-      <p style={{ opacity: 0.6, marginTop: 16 }}>Landing page stub — replaced by Terminal B.</p>
-      <a
-        href="/login"
-        style={{
-          display: 'inline-block',
-          marginTop: 24,
-          padding: '10px 20px',
-          background: '#d4a843',
-          color: '#080808',
-          textDecoration: 'none',
-          fontWeight: 600,
-          borderRadius: 4,
-        }}
-      >
-        Sign in
-      </a>
+    <div className="landing-shell">
+      <MeshBackground />
+      <div className="landing-shell__content">
+        <LandingNav />
+        <main className="landing-main">
+          <Hero />
+          <PipelineScrolly />
+          <Features />
+          <CTACard />
+        </main>
+        <LandingFooter />
+      </div>
     </div>
   )
 }
+
+function LandingNav() {
+  return (
+    <nav className="landing-nav" aria-label="Landing primary">
+      <a className="landing-nav__brand" href="/">
+        <span className="landing-nav__mark" aria-hidden>✦</span>
+        <span>Explodify</span>
+      </a>
+      <div className="landing-nav__actions">
+        <a
+          className="landing-nav__link"
+          href="#pipeline"
+          onClick={(e) => {
+            e.preventDefault()
+            document.getElementById('pipeline')?.scrollIntoView({ behavior: 'smooth' })
+          }}
+        >
+          How it works
+        </a>
+        <a className="landing-nav__cta" href="/login">
+          Sign in
+        </a>
+      </div>
+    </nav>
+  )
+}
+
+function LandingFooter() {
+  return (
+    <footer className="landing-footer">
+      <span className="landing-footer__brand">Explodify</span>
+      <span className="landing-footer__meta">
+        CAD to advertisement · built for product teams
+      </span>
+      <span className="landing-footer__copy">© 2026</span>
+    </footer>
+  )
+}
+
+export default LandingPage
