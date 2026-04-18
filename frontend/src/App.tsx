@@ -1,5 +1,6 @@
 // frontend/src/App.tsx
 import { useState, useEffect, useRef } from 'react'
+import { Routes, Route, useLocation, useNavigate } from 'react-router-dom'
 import { UploadZone } from './components/UploadZone'
 import { StylePanel } from './components/StylePanel'
 import { EasingEditor, ORBIT_EASING_PRESETS, CINEMATIC_EXPLOSION_SAMPLES, CINEMATIC_ORBIT_SAMPLES } from './components/EasingEditor'
@@ -18,6 +19,12 @@ import { JobQueueProvider, useJobQueue } from './contexts/JobQueueContext'
 import { JobQueueIndicator } from './components/JobQueueIndicator'
 import { getPreviewImages, createJob, getJobStatus, approvePhase4, restyleJob } from './api/client'
 import type { JobStatus, LoopMode, PreviewResult, VariantName } from './api/client'
+import RequireAuth from './routes/RequireAuth'
+import RootRedirect from './routes/RootRedirect'
+import { useActiveTab, pathForTab } from './routes/useActiveTab'
+import LoginPage from './pages/LoginPage'
+import AuthCallback from './pages/AuthCallback'
+import DashboardPage from './pages/DashboardPage'
 
 type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'awaiting_approval' | 'styling' | 'done' | 'error'
 
@@ -53,14 +60,29 @@ const DEFAULT_ORBIT_EASING = CINEMATIC_ORBIT_SAMPLES
 export default function App() {
   return (
     <JobQueueProvider>
-      <AppInner />
+      <Routes>
+        <Route path="/" element={<RootRedirect />} />
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/auth/callback" element={<AuthCallback />} />
+        <Route element={<RequireAuth />}>
+          <Route path="/dashboard" element={<AppInner />} />
+          <Route path="/studio" element={<AppInner />} />
+          <Route path="/gallery" element={<AppInner />} />
+          <Route path="/profile" element={<AppInner />} />
+        </Route>
+      </Routes>
       <JobQueueIndicator />
     </JobQueueProvider>
   )
 }
 
 function AppInner() {
-  const [tab, setTab] = useState<NavTab>('studio')
+  const tab: NavTab = useActiveTab()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const routeState = location.state as { initialPrompt?: string } | null
+  const initialPrompt = routeState?.initialPrompt
+
   const [state, setState] = useState<AppState>('idle')
   const [jobId, setJobId] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
@@ -86,6 +108,12 @@ function AppInner() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const restyleStackRef = useRef<RestyleEntry[]>(restyleStack)
   restyleStackRef.current = restyleStack
+
+  useEffect(() => {
+    if (initialPrompt) {
+      setStyleOptions(s => ({ ...s, prompt: initialPrompt }))
+    }
+  }, [initialPrompt])
 
   const settingsChanged = renderedSettings !== null && (
     renderedSettings.explodeScalar !== explodeScalar ||
@@ -282,16 +310,25 @@ function AppInner() {
       <div className="app-topbar-nav">
         <TopNav
           tab={tab}
-          onChange={setTab}
+          onChange={(next) => navigate(pathForTab(next))}
           creditsRemaining={30}
           creditsTotal={30}
-          onCreditClick={() => setTab('profile')}
+          onCreditClick={() => navigate(pathForTab('profile'))}
         />
       </div>
 
       <div className="app-topbar-meta" />
     </header>
   )
+
+  if (tab === 'home') {
+    return (
+      <div className="app-shell">
+        {topbar}
+        <DashboardPage />
+      </div>
+    )
+  }
 
   if (tab === 'gallery') {
     return (
@@ -589,4 +626,3 @@ function DualApprovalGate({
     </div>
   )
 }
-

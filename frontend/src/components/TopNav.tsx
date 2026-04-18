@@ -1,5 +1,7 @@
 // frontend/src/components/TopNav.tsx
-export type NavTab = 'studio' | 'gallery' | 'profile'
+import CreditsCube from './shell/CreditsCube'
+
+export type NavTab = 'home' | 'studio' | 'gallery' | 'profile'
 
 interface TabDef {
   id: NavTab
@@ -8,6 +10,7 @@ interface TabDef {
 }
 
 const TABS: TabDef[] = [
+  { id: 'home',    index: '00', label: 'Home' },
   { id: 'studio',  index: '01', label: 'Studio' },
   { id: 'gallery', index: '02', label: 'Gallery' },
   { id: 'profile', index: '03', label: 'Profile' },
@@ -25,8 +28,6 @@ interface Props {
 export function TopNav({ tab, onChange, galleryCount, creditsRemaining, creditsTotal, onCreditClick }: Props) {
   const activeIdx = TABS.findIndex(t => t.id === tab)
   const showCredits = typeof creditsRemaining === 'number' && typeof creditsTotal === 'number'
-  const creditPct = showCredits ? Math.max(0, Math.min(100, (creditsRemaining! / creditsTotal!) * 100)) : 0
-  const creditLow = showCredits && creditsRemaining! <= creditsTotal! * 0.3
 
   return (
     <nav className="top-nav" aria-label="Primary">
@@ -70,22 +71,11 @@ export function TopNav({ tab, onChange, galleryCount, creditsRemaining, creditsT
       </div>
 
       {showCredits && (
-        <button
-          type="button"
-          className={`top-nav-credits ${creditLow ? 'top-nav-credits--low' : ''}`}
+        <CreditsCube
+          remaining={creditsRemaining!}
+          total={creditsTotal!}
           onClick={onCreditClick}
-          aria-label={`${creditsRemaining} credits remaining. Click to upgrade.`}
-        >
-          <span className="top-nav-credits-bar" aria-hidden>
-            <span
-              className="top-nav-credits-fill"
-              style={{ width: `${creditPct}%` }}
-            />
-          </span>
-          <span className="top-nav-credits-label">
-            {creditsRemaining} <span className="top-nav-credits-unit">cr</span>
-          </span>
-        </button>
+        />
       )}
     </nav>
   )
