@@ -9,8 +9,15 @@ import type { MeshViewerHandle } from './components/MeshViewer'
 import { IdleOutput } from './components/IdleOutput'
 import { LoadingOutput } from './components/LoadingOutput'
 import { VideoOutput } from './components/VideoOutput'
+import { LoopModeSelector } from './components/LoopModeSelector'
+import { TopNav } from './components/TopNav'
+import type { NavTab } from './components/TopNav'
+import { Gallery } from './components/Gallery'
+import { Profile } from './components/Profile'
+import { JobQueueProvider, useJobQueue } from './contexts/JobQueueContext'
+import { JobQueueIndicator } from './components/JobQueueIndicator'
 import { getPreviewImages, createJob, getJobStatus, approvePhase4, restyleJob } from './api/client'
-import type { JobStatus, PreviewResult, VariantName } from './api/client'
+import type { JobStatus, LoopMode, PreviewResult, VariantName } from './api/client'
 
 type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'awaiting_approval' | 'styling' | 'done' | 'error'
 
@@ -44,6 +51,16 @@ const DEFAULT_EASING = CINEMATIC_EXPLOSION_SAMPLES
 const DEFAULT_ORBIT_EASING = CINEMATIC_ORBIT_SAMPLES
 
 export default function App() {
+  return (
+    <JobQueueProvider>
+      <AppInner />
+      <JobQueueIndicator />
+    </JobQueueProvider>
+  )
+}
+
+function AppInner() {
+  const [tab, setTab] = useState<NavTab>('studio')
   const [state, setState] = useState<AppState>('idle')
   const [jobId, setJobId] = useState<string | null>(null)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
@@ -59,6 +76,8 @@ export default function App() {
   const [orbitMode, setOrbitMode] = useState<OrbitMode>('horizontal')
   const [orbitDirection, setOrbitDirection] = useState<OrbitDirection>(1)
   const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(DEFAULT_ORBIT_EASING)
+  const [loopMode, setLoopMode] = useState<LoopMode>('loop-preview')
+  const { enqueue: enqueueJob } = useJobQueue()
   const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode; orbitDirection: OrbitDirection } | null>(null)
   const [restyleStack, setRestyleStack] = useState<RestyleEntry[]>([])
   const [cameraDirection, setCameraDirection] = useState<[number, number, number]>([0.3, 0.3, 1.0])
@@ -120,9 +139,15 @@ export default function App() {
         orbitDirection,
         orbitEasingCurve,
         variantsToRender,
+        loopMode,
       })
       setJobId(id)
       setJobStatus(null)
+      enqueueJob(
+        id,
+        `${uploadedFile?.name?.replace(/\.[^/.]+$/, '') ?? 'Render'} · ${selectedVariant.toUpperCase()} axis`,
+        { pinnedToCurrent: true },
+      )
       setRenderedSettings({ explodeScalar, orbitRangeDeg, cameraZoom, orbitMode, orbitDirection })
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Job creation failed')
@@ -172,6 +197,10 @@ export default function App() {
         { jobId: newJobId, status: 'generating', variants, aiStyled: false },
         ...prev,
       ])
+      enqueueJob(
+        newJobId,
+        `Restyle · ${variants.map(v => v.toUpperCase()).join('+')}`,
+      )
     } catch {
       // silently fail — the skeleton will not appear
     }
@@ -241,15 +270,62 @@ export default function App() {
   const showControls = state === 'orientation' || state === 'processing' || state === 'awaiting_approval' || state === 'styling' || state === 'done'
   const controlsDisabled = state !== 'orientation' && state !== 'awaiting_approval'
 
+  const topbar = (
+    <header className="app-topbar" role="banner">
+      <span className="app-topbar-edge app-topbar-edge--l" aria-hidden />
+      <span className="app-topbar-edge app-topbar-edge--r" aria-hidden />
+
+      <div className="app-topbar-brand">
+        <span className="wordmark">EXPLOD<em>I</em>FY</span>
+      </div>
+
+      <div className="app-topbar-nav">
+        <TopNav
+          tab={tab}
+          onChange={setTab}
+          creditsRemaining={30}
+          creditsTotal={30}
+          onCreditClick={() => setTab('profile')}
+        />
+      </div>
+
+      <div className="app-topbar-meta" />
+    </header>
+  )
+
+  if (tab === 'gallery') {
+    return (
+      <div className="app-shell">
+        {topbar}
+        <div className="app-layout app-layout--single">
+          <main className="right-panel right-panel--gallery">
+            <Gallery />
+          </main>
+        </div>
+      </div>
+    )
+  }
+
+  if (tab === 'profile') {
+    return (
+      <div className="app-shell">
+        {topbar}
+        <div className="app-layout app-layout--single">
+          <main className="right-panel right-panel--profile">
+            <Profile />
+          </main>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div className="app-layout">
+    <div className="app-shell">
+      {topbar}
+      <div className="app-layout">
 
       {/* Left panel */}
       <aside className="left-panel">
-        <header className="brand-header">
-          <span className="wordmark">EXPLOD<em>I</em>FY</span>
-          <span className="tagline">CAD → Exploded View</span>
-        </header>
 
         <div className="left-scroll">
 
@@ -298,6 +374,15 @@ export default function App() {
                       onChange={setOrbitEasingCurve}
                       disabled={false}
                       presets={ORBIT_EASING_PRESETS}
+                    />
+                  </section>
+
+                  <section className="panel-section animate-fade-in">
+                    <div className="section-label">Loop Mode</div>
+                    <LoopModeSelector
+                      value={loopMode}
+                      onChange={setLoopMode}
+                      disabled={false}
                     />
                   </section>
                 </>
@@ -436,6 +521,7 @@ export default function App() {
           </div>
         )}
       </main>
+      </div>
     </div>
   )
 }

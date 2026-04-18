@@ -49,6 +49,23 @@ interface Row {
   material: string
 }
 
+export type LoopMode = 'standard' | 'loop-preview'
+
+export type GalleryKind = 'base' | 'styled' | 'stitched' | 'loop'
+
+export interface GalleryItem {
+  id: string
+  job_id: string | null
+  variant: string | null
+  kind: GalleryKind
+  title: string
+  video_path: string
+  thumbnail_path: string | null
+  duration_s: number | null
+  created_at: number
+  metadata: Record<string, unknown>
+}
+
 export async function createJob(
   options: {
     previewId: string
@@ -65,6 +82,7 @@ export async function createJob(
     orbitDirection?: 1 | -1
     orbitEasingCurve?: number[]
     variantsToRender?: VariantName[]
+    loopMode?: LoopMode
   },
 ): Promise<string> {
   const form = new FormData()
@@ -89,6 +107,9 @@ export async function createJob(
   }
   if (options.variantsToRender) {
     form.append('variants_to_render', options.variantsToRender.join(','))
+  }
+  if (options.loopMode) {
+    form.append('loop_mode', options.loopMode)
   }
 
   const resp = await fetch('/jobs', { method: 'POST', body: form })
@@ -139,6 +160,53 @@ export async function fetchPreviewFrame(
   const blob = await resp.blob()
   return URL.createObjectURL(blob)
 }
+
+// ── Gallery & stitch API ────────────────────────────────────────────────────
+
+export async function listGallery(kind?: GalleryKind): Promise<GalleryItem[]> {
+  const url = kind ? `/gallery?kind=${encodeURIComponent(kind)}` : '/gallery'
+  const resp = await fetch(url)
+  if (!resp.ok) throw new Error(`Gallery list failed: ${resp.statusText}`)
+  const data = await resp.json()
+  return (data.items ?? []) as GalleryItem[]
+}
+
+export async function deleteGalleryItem(itemId: string): Promise<void> {
+  const resp = await fetch(`/gallery/${itemId}`, { method: 'DELETE' })
+  if (!resp.ok) throw new Error(`Gallery delete failed: ${resp.statusText}`)
+}
+
+export async function renameGalleryItem(itemId: string, title: string): Promise<void> {
+  const form = new FormData()
+  form.append('title', title)
+  const resp = await fetch(`/gallery/${itemId}/rename`, { method: 'POST', body: form })
+  if (!resp.ok) throw new Error(`Gallery rename failed: ${resp.statusText}`)
+}
+
+export async function stitchGalleryItems(
+  itemIds: string[],
+  title?: string,
+): Promise<GalleryItem> {
+  const form = new FormData()
+  form.append('item_ids', JSON.stringify(itemIds))
+  if (title) form.append('title', title)
+  const resp = await fetch('/stitch', { method: 'POST', body: form })
+  if (!resp.ok) {
+    const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
+    throw new Error(detail.detail ?? resp.statusText)
+  }
+  return resp.json()
+}
+
+export function galleryVideoUrl(itemId: string): string {
+  return `/gallery/${itemId}/video`
+}
+
+export function galleryThumbnailUrl(itemId: string): string {
+  return `/gallery/${itemId}/thumbnail`
+}
+
+// ── Approval ────────────────────────────────────────────────────────────────
 
 export async function approvePhase4(
   jobId: string,

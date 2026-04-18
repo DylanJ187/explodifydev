@@ -4,6 +4,11 @@ import type { ReactElement } from 'react'
 import type { VariantName } from '../api/client'
 import type { StyleOptions, RestyleEntry } from '../App'
 import { StylePanel } from './StylePanel'
+import { CustomVideoPlayer } from './CustomVideoPlayer'
+
+// TODO: wire to real auth/plan state — for now, treat all users as Free Tier.
+// Free tier blocks download & adds watermark to discourage redistribution.
+const USER_CAN_DOWNLOAD = false
 
 interface Props {
   jobId: string
@@ -43,23 +48,21 @@ function VideoPlayer({
       <div className="video-variant-header">
         <span className="video-variant-label">{VARIANT_LABELS[variant]}</span>
         <div className="video-variant-controls">
-          <button className="video-loop-toggle" onClick={() => setShowLoop(v => !v)}>
-            {showLoop ? 'One-shot' : 'Loop'}
+          <button
+            className={`video-loop-toggle ${showLoop ? 'video-loop-toggle--active' : ''}`}
+            onClick={() => setShowLoop(v => !v)}
+            aria-pressed={showLoop}
+          >
+            <span className="video-loop-toggle-dot" />
+            {showLoop ? '6s loop' : '3s one-shot'}
           </button>
-          <a className="video-dl-btn" href={src} download={downloadName}>
-            ↓ Download
-          </a>
         </div>
       </div>
       <div className="video-hero-stage">
-        <video
+        <CustomVideoPlayer
           src={src}
-          controls
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="video-hero-player"
+          downloadName={downloadName}
+          canDownload={USER_CAN_DOWNLOAD}
         />
         {stageOverlay}
       </div>

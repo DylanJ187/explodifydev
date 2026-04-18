@@ -12,6 +12,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
 import backend.jobs as jobs
+from backend.gallery import GalleryStore
+from backend.media_utils import concat_videos, extract_thumbnail, probe_duration
 from backend.models import JobStatus
 
 _PROJECT_ROOT = Path(__file__).parent.parent
@@ -33,10 +35,55 @@ app.add_middleware(
 
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "explodify_uploads"
 PREVIEW_DIR = Path(tempfile.gettempdir()) / "explodify_previews"
+GALLERY_DIR = Path(tempfile.gettempdir()) / "explodify_gallery"
+STITCH_DIR = GALLERY_DIR / "stitched"
+THUMB_DIR = GALLERY_DIR / "thumbnails"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+GALLERY_DIR.mkdir(parents=True, exist_ok=True)
+STITCH_DIR.mkdir(parents=True, exist_ok=True)
+THUMB_DIR.mkdir(parents=True, exist_ok=True)
+
+gallery_store = GalleryStore(GALLERY_DIR / "gallery.db")
 
 VARIANT_NAMES = ("x", "y", "z")
+
+
+def _register_gallery_video(
+    *,
+    video_path: Path,
+    kind: str,
+    title: str,
+    job_id: str | None = None,
+    variant: str | None = None,
+    metadata: dict | None = None,
+) -> dict | None:
+    """Add a completed video to the gallery, generating a thumbnail best-effort.
+
+    Never raises — gallery registration is a nice-to-have side effect of job
+    completion, and must not break the pipeline.
+    """
+    try:
+        if not Path(video_path).exists():
+            return None
+        thumb_name = f"{uuid.uuid4().hex}.jpg"
+        thumb_out = THUMB_DIR / thumb_name
+        thumb = extract_thumbnail(Path(video_path), thumb_out)
+        duration = probe_duration(Path(video_path))
+        return gallery_store.add_item(
+            kind=kind,
+            title=title,
+            video_path=Path(video_path),
+            thumbnail_path=thumb,
+            duration_s=duration,
+            job_id=job_id,
+            variant=variant,
+            metadata=metadata or {},
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort logging
+        import logging
+        logging.warning("Gallery registration failed: %s", exc)
+        return None
 
 
 @app.get("/health")
@@ -184,6 +231,7 @@ async def create_job(
     orbit_mode: str = Form("horizontal"),
     orbit_direction: int = Form(1),
     orbit_easing: Optional[str] = Form(None),
+    loop_mode: str = Form("standard"),
 ):
     if preview_id:
         matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
@@ -363,7 +411,10 @@ def get_loop_video(job_id: str, variant: str):
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    path = UPLOAD_DIR / job_id / f"loop_video_{variant}.mp4"
+    # Prefer the styled loop if it exists; fall back to unstyled.
+    styled_loop = UPLOAD_DIR / job_id / f"final_loop_video_{variant}.mp4"
+    unstyled_loop = UPLOAD_DIR / job_id / f"loop_video_{variant}.mp4"
+    path = styled_loop if styled_loop.exists() else unstyled_loop
     if not path.exists():
         raise HTTPException(status_code=404, detail="Loop video not ready")
     return FileResponse(str(path), media_type="video/mp4")
@@ -390,6 +441,132 @@ def get_video_variant(job_id: str, variant: str):
 def get_video(job_id: str):
     """Legacy endpoint -- serves longest-axis variant."""
     return get_video_variant(job_id, "longest")
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Gallery endpoints
+# ────────────────────────────────────────────────────────────────────────────
+
+
+@app.get("/gallery")
+def list_gallery(kind: Optional[str] = None, limit: int = 200):
+    allowed_kinds = {"base", "styled", "stitched", "loop"}
+    kind_filter = kind if kind in allowed_kinds else None
+    items = gallery_store.list_items(kind=kind_filter, limit=limit)  # type: ignore[arg-type]
+    return {"items": items}
+
+
+@app.get("/gallery/{item_id}")
+def get_gallery_item(item_id: str):
+    item = gallery_store.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    return item
+
+
+@app.get("/gallery/{item_id}/video")
+def get_gallery_video(item_id: str):
+    item = gallery_store.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    path = Path(item["video_path"])
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Video file missing on disk")
+    return FileResponse(str(path), media_type="video/mp4")
+
+
+@app.get("/gallery/{item_id}/thumbnail")
+def get_gallery_thumbnail(item_id: str):
+    item = gallery_store.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    thumb = item.get("thumbnail_path")
+    if not thumb or not Path(thumb).exists():
+        raise HTTPException(status_code=404, detail="Thumbnail unavailable")
+    return FileResponse(str(thumb), media_type="image/jpeg")
+
+
+@app.post("/gallery/{item_id}/rename")
+def rename_gallery_item(item_id: str, title: str = Form(...)):
+    clean = (title or "").strip()[:120]
+    if not clean:
+        raise HTTPException(status_code=422, detail="Title cannot be empty")
+    ok = gallery_store.update_title(item_id, clean)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    return {"ok": True, "title": clean}
+
+
+@app.delete("/gallery/{item_id}")
+def delete_gallery_item(item_id: str):
+    item = gallery_store.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    gallery_store.delete_item(item_id)
+    # Stitched items own their files — clean up on deletion.
+    if item["kind"] == "stitched":
+        try:
+            Path(item["video_path"]).unlink(missing_ok=True)
+            if item.get("thumbnail_path"):
+                Path(item["thumbnail_path"]).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return {"ok": True}
+
+
+@app.post("/stitch", status_code=201)
+def stitch_gallery_items(
+    item_ids: str = Form(...),
+    title: Optional[str] = Form(None),
+):
+    """Concat an ordered list of gallery items into a new stitched item.
+
+    `item_ids` is a JSON array of gallery item IDs, in the order they should
+    appear in the output. Source items remain in the gallery untouched.
+    """
+    import json as _json
+    try:
+        ordered_ids: list[str] = _json.loads(item_ids)
+    except Exception:
+        raise HTTPException(status_code=422, detail="item_ids must be a JSON array")
+    if not isinstance(ordered_ids, list) or len(ordered_ids) < 2:
+        raise HTTPException(status_code=422, detail="Provide at least 2 item ids to stitch")
+
+    source_paths: list[Path] = []
+    source_titles: list[str] = []
+    for iid in ordered_ids:
+        src = gallery_store.get_item(iid)
+        if src is None:
+            raise HTTPException(status_code=404, detail=f"Gallery item {iid} not found")
+        vp = Path(src["video_path"])
+        if not vp.exists():
+            raise HTTPException(status_code=404, detail=f"Video file for {iid} is missing")
+        source_paths.append(vp)
+        source_titles.append(src["title"])
+
+    stitched_id = str(uuid.uuid4())
+    out_path = STITCH_DIR / f"{stitched_id}.mp4"
+
+    try:
+        concat_videos(source_paths, out_path)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    default_title = title or f"Stitched ({len(source_paths)} clips)"
+    item = _register_gallery_video(
+        video_path=out_path,
+        kind="stitched",
+        title=default_title,
+        metadata={"source_ids": ordered_ids, "source_titles": source_titles},
+    )
+    if item is None:
+        raise HTTPException(status_code=500, detail="Failed to register stitched item")
+    return item
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# Restyle + pipeline
+# ────────────────────────────────────────────────────────────────────────────
 
 
 @app.post("/jobs/{job_id}/restyle", status_code=202)
@@ -470,6 +647,41 @@ async def _run_phase4_only(
 
         if style_tasks:
             await asyncio.gather(*style_tasks)
+
+        # Styled loops + gallery auto-save for the restyle flow.
+        from pipeline.phase3_assemble import FrameAssembler as _FA
+        loop_assembler = _FA()
+        loop_tasks = []
+        for variant in variants:
+            styled_path = output_dir / f"final_video_{variant}.mp4"
+            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
+            if styled_path.exists():
+                loop_tasks.append(
+                    asyncio.to_thread(
+                        loop_assembler.reverse_and_concat,
+                        styled_path, styled_loop_path,
+                    )
+                )
+        if loop_tasks:
+            await asyncio.gather(*loop_tasks, return_exceptions=True)
+
+        for variant in variants:
+            styled_path = output_dir / f"final_video_{variant}.mp4"
+            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
+            if styled_path.exists():
+                _register_gallery_video(
+                    video_path=styled_path, kind="styled",
+                    title=f"Restyle · {variant.upper()} axis",
+                    job_id=job_id, variant=variant,
+                    metadata={"style_prompt": style_prompt, "style": "styled", "restyle": True},
+                )
+            if styled_loop_path.exists():
+                _register_gallery_video(
+                    video_path=styled_loop_path, kind="loop",
+                    title=f"Restyle 6s loop · {variant.upper()} axis",
+                    job_id=job_id, variant=variant,
+                    metadata={"source": "styled", "style": "styled", "restyle": True},
+                )
 
         jobs.update_phase(job_id, 4, "done")
         jobs.mark_done(job_id, ai_styled=len(style_tasks) > 0)
@@ -565,6 +777,25 @@ async def _run_pipeline(
         await asyncio.gather(*loop_tasks)
         jobs.update_phase(job_id, 3, "done")
 
+        # Auto-save unstyled renders + loops to gallery (non-fatal if it fails).
+        for v in _variants:
+            base_path = output_dir / f"base_video_{v}.mp4"
+            loop_path = output_dir / f"loop_video_{v}.mp4"
+            if base_path.exists():
+                _register_gallery_video(
+                    video_path=base_path, kind="base",
+                    title=f"Base render · {v.upper()} axis",
+                    job_id=job_id, variant=v,
+                    metadata={"explode_scalar": scalar, "style": "unstyled"},
+                )
+            if loop_path.exists():
+                _register_gallery_video(
+                    video_path=loop_path, kind="loop",
+                    title=f"6s loop · {v.upper()} axis",
+                    job_id=job_id, variant=v,
+                    metadata={"source": "base", "style": "unstyled"},
+                )
+
         # -- Phase 4: Kling styling -----------------------------------------------
         # When auto_approve is True (single-variant new flow), skip the approval
         # gate and proceed immediately with the rendered variants.
@@ -608,6 +839,42 @@ async def _run_pipeline(
 
         if style_tasks:
             await asyncio.gather(*style_tasks)
+
+        # Produce styled 6-second loops (reverse + concat) for every styled
+        # variant, then register both the styled and its loop into the gallery.
+        from pipeline.phase3_assemble import FrameAssembler as _FA
+        loop_assembler = _FA()
+        styled_loop_tasks = []
+        for variant in selected:
+            styled_path = output_dir / f"final_video_{variant}.mp4"
+            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
+            if styled_path.exists():
+                styled_loop_tasks.append(
+                    asyncio.to_thread(
+                        loop_assembler.reverse_and_concat,
+                        styled_path, styled_loop_path,
+                    )
+                )
+        if styled_loop_tasks:
+            await asyncio.gather(*styled_loop_tasks, return_exceptions=True)
+
+        for variant in selected:
+            styled_path = output_dir / f"final_video_{variant}.mp4"
+            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
+            if styled_path.exists():
+                _register_gallery_video(
+                    video_path=styled_path, kind="styled",
+                    title=f"AI styled · {variant.upper()} axis",
+                    job_id=job_id, variant=variant,
+                    metadata={"style_prompt": style_prompt, "style": "styled"},
+                )
+            if styled_loop_path.exists():
+                _register_gallery_video(
+                    video_path=styled_loop_path, kind="loop",
+                    title=f"6s styled loop · {variant.upper()} axis",
+                    job_id=job_id, variant=variant,
+                    metadata={"source": "styled", "style": "styled"},
+                )
 
         jobs.update_phase(job_id, 4, "done")
         jobs.mark_done(job_id, ai_styled=len(style_tasks) > 0)
