@@ -49,7 +49,19 @@ interface Row {
   material: string
 }
 
-export type LoopMode = 'standard' | 'loop-preview'
+export type ModelTier = 'standard' | 'high_quality' | 'premium'
+
+export const MODEL_TIER_CREDITS: Record<ModelTier, number> = {
+  standard: 5,
+  high_quality: 15,
+  premium: 30,
+}
+
+export const MODEL_TIER_LABELS: Record<ModelTier, string> = {
+  standard: 'Standard Quality',
+  high_quality: 'High Quality',
+  premium: 'Maximum Quality',
+}
 
 export type GalleryKind = 'base' | 'styled' | 'stitched' | 'loop'
 
@@ -82,7 +94,7 @@ export async function createJob(
     orbitDirection?: 1 | -1
     orbitEasingCurve?: number[]
     variantsToRender?: VariantName[]
-    loopMode?: LoopMode
+    modelTier?: ModelTier
   },
 ): Promise<string> {
   const form = new FormData()
@@ -108,8 +120,8 @@ export async function createJob(
   if (options.variantsToRender) {
     form.append('variants_to_render', options.variantsToRender.join(','))
   }
-  if (options.loopMode) {
-    form.append('loop_mode', options.loopMode)
+  if (options.modelTier) {
+    form.append('model_tier', options.modelTier)
   }
 
   const resp = await fetch('/jobs', { method: 'POST', body: form })
@@ -130,12 +142,16 @@ export async function restyleJob(
     rows: Row[]
     stylePrompt: string
     selectedVariants: VariantName[]
+    modelTier?: ModelTier
   },
 ): Promise<string> {
   const form = new FormData()
   form.append('component_rows', JSON.stringify(options.rows))
   form.append('style_prompt', options.stylePrompt)
   form.append('selected_variants', options.selectedVariants.join(','))
+  if (options.modelTier) {
+    form.append('model_tier', options.modelTier)
+  }
   const resp = await fetch(`/jobs/${sourceJobId}/restyle`, { method: 'POST', body: form })
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
@@ -197,6 +213,19 @@ export async function stitchGalleryItems(
   return resp.json()
 }
 
+export async function createGalleryLoop(
+  itemId: string,
+  title?: string,
+): Promise<GalleryItem> {
+  const form = new FormData()
+  if (title) form.append('title', title)
+  const resp = await fetch(`/gallery/${itemId}/loop`, { method: 'POST', body: form })
+  if (!resp.ok) {
+    await throwGalleryError(resp)
+  }
+  return resp.json()
+}
+
 // ── Save / capacity / favorite ──────────────────────────────────────────────
 
 export type GalleryTier = 'free' | 'pro' | 'studio'
@@ -243,7 +272,7 @@ export async function getGalleryStats(): Promise<GalleryStats> {
 export async function saveToGallery(options: {
   jobId: string
   variant: VariantName
-  kind: Exclude<GalleryKind, 'stitched'>
+  kind: Exclude<GalleryKind, 'stitched' | 'loop'>
   title?: string
 }): Promise<GalleryItem> {
   const form = new FormData()
@@ -260,7 +289,7 @@ export async function replaceGalleryItem(options: {
   replaceId: string
   jobId: string
   variant: VariantName
-  kind: Exclude<GalleryKind, 'stitched'>
+  kind: Exclude<GalleryKind, 'stitched' | 'loop'>
   title?: string
 }): Promise<GalleryItem> {
   const form = new FormData()
@@ -365,6 +394,7 @@ export async function approvePhase4(
   styleOpts?: {
     rows: Row[]
     stylePrompt: string
+    modelTier?: ModelTier
   },
 ): Promise<void> {
   const form = new FormData()
@@ -372,6 +402,9 @@ export async function approvePhase4(
   if (styleOpts) {
     form.append('component_rows', JSON.stringify(styleOpts.rows))
     form.append('style_prompt', styleOpts.stylePrompt)
+    if (styleOpts.modelTier) {
+      form.append('model_tier', styleOpts.modelTier)
+    }
   }
   const resp = await fetch(`/jobs/${jobId}/approve`, { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Approval failed: ${resp.statusText}`)

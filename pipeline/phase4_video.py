@@ -1,18 +1,15 @@
 # pipeline/phase4_video.py
-"""Phase 4: Apply photorealistic style to the assembled video via Kling o1 edit.
+"""Phase 4: Apply photorealistic style to the assembled video via a Kling
+video-to-video edit endpoint on fal.ai.
 
 Strategy: pyrender produces geometrically exact motion (72 frames, Phase 2+3).
-Kling o1 edit preserves that motion structure completely while applying
-studio-quality materials, lighting, and environment.
+The Kling edit preserves that motion structure while applying studio-quality
+materials, lighting, and environment.
 
-The prompt is built upstream by pipeline.prompt_interpreter, which fills a
-structured template from the user's material description, style toggles, and
-free-text notes.  This module receives the final prompt string and handles
-only the FAL API interaction (upload, submit, download).
-
-Endpoint: fal-ai/kling-video/o1/standard/video-to-video/edit
-  - Transforms style/setting/lighting while retaining original motion.
-  - Required: prompt, video_url
+The user picks a model tier (Standard / High Quality / Premium) which maps to
+a specific Kling endpoint and credit cost (see pricing-model.md). The prompt
+is built upstream by pipeline.prompt_interpreter; this module only handles the
+FAL API interaction (upload, submit, download).
 """
 import asyncio
 import os
@@ -21,11 +18,28 @@ from pathlib import Path
 import fal_client
 import httpx
 
-FAL_KLING_EDIT = "fal-ai/kling-video/o1/video-to-video/edit"
+# Tier → fal.ai endpoint map.
+# Premium (Kling o1) is the confirmed-working endpoint. Standard (Kling 3.0)
+# and High Quality (Kling 2.5 Pro) use the analogous v2v paths. Update these
+# strings if fal.ai renames an endpoint — they are the only thing this module
+# cares about at call time.
+FAL_ENDPOINTS: dict[str, str] = {
+    "premium":      "fal-ai/kling-video/o1/video-to-video/edit",
+    "high_quality": "fal-ai/kling-video/v2.5-pro/video-to-video",
+    "standard":     "fal-ai/kling-video/v3/standard/video-to-video",
+}
+
+DEFAULT_TIER = "premium"
+
+
+def resolve_endpoint(model_tier: str | None) -> str:
+    """Return the fal.ai endpoint for the requested tier, defaulting to Premium."""
+    tier = (model_tier or DEFAULT_TIER).lower()
+    return FAL_ENDPOINTS.get(tier, FAL_ENDPOINTS[DEFAULT_TIER])
 
 
 class KlingVideoEditor:
-    """Phase 4: Upload assembled video → Kling o1 edit → download styled result."""
+    """Phase 4: Upload assembled video → Kling edit → download styled result."""
 
     def __init__(self, fal_key: str | None = None) -> None:
         key = fal_key or os.environ.get("FAL_KEY", "")
@@ -35,43 +49,43 @@ class KlingVideoEditor:
                 "Set it in your .env file."
             )
         os.environ["FAL_KEY"] = key
-        self._endpoint = FAL_KLING_EDIT
 
     async def edit(
         self,
         video_path: Path,
         prompt: str,
         output_path: Path,
+        model_tier: str | None = None,
     ) -> Path:
-        """Upload raw video, apply Kling o1 style edit, write result.
+        """Upload raw video, apply Kling style edit at the given tier, write result.
 
         Args:
             video_path:  Path to the mp4 assembled in Phase 3.
             prompt:      Fully assembled prompt from prompt_interpreter.
             output_path: Destination for the styled mp4.
+            model_tier:  "standard" | "high_quality" | "premium" (default).
 
         Returns:
             output_path after writing.
         """
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        endpoint = resolve_endpoint(model_tier)
 
-        # Upload to fal.ai storage (returns a hosted URL)
         print("[Phase 4] Uploading base video to fal.ai storage...")
         video_url = await asyncio.to_thread(
             fal_client.upload_file, str(video_path)
         )
         print(f"[Phase 4] Uploaded -> {video_url}")
 
-        print(f"[Phase 4] Submitting Kling o1 edit...")
+        print(f"[Phase 4] Submitting {endpoint} (tier={model_tier or DEFAULT_TIER})...")
         print(f"[Phase 4] Prompt: {prompt[:200]}...")
 
-        # Blocking fal_client.subscribe call, run off the event loop.
         # duration="3" matches the 72-frame 24fps base video exactly.
         # Omitting it lets Kling default to 5s and stretch the motion.
         result = await asyncio.to_thread(
             fal_client.subscribe,
-            self._endpoint,
+            endpoint,
             arguments={
                 "prompt": prompt,
                 "video_url": video_url,
@@ -83,7 +97,6 @@ class KlingVideoEditor:
         file_size = result["video"].get("file_size", 0)
         print(f"[Phase 4] Result ready ({file_size // 1024} KB) → {output_url}")
 
-        # Download the styled video
         async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.get(output_url)
             resp.raise_for_status()

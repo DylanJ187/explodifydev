@@ -39,6 +39,7 @@ UPLOAD_DIR = Path(tempfile.gettempdir()) / "explodify_uploads"
 PREVIEW_DIR = Path(tempfile.gettempdir()) / "explodify_previews"
 GALLERY_DIR = Path(tempfile.gettempdir()) / "explodify_gallery"
 STITCH_DIR = GALLERY_DIR / "stitched"
+LOOP_DIR = GALLERY_DIR / "loops"
 THUMB_DIR = GALLERY_DIR / "thumbnails"
 ACCOUNT_DIR = Path(tempfile.gettempdir()) / "explodify_accounts"
 AVATAR_DIR = ACCOUNT_DIR / "avatars"
@@ -46,6 +47,7 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 GALLERY_DIR.mkdir(parents=True, exist_ok=True)
 STITCH_DIR.mkdir(parents=True, exist_ok=True)
+LOOP_DIR.mkdir(parents=True, exist_ok=True)
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
 AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -78,10 +80,6 @@ def _job_output_path(job_id: str, variant: str, kind: str) -> Path | None:
         return base / f"base_video_{variant}.mp4"
     if kind == "styled":
         return base / f"final_video_{variant}.mp4"
-    if kind == "loop":
-        styled_loop = base / f"final_loop_video_{variant}.mp4"
-        unstyled_loop = base / f"loop_video_{variant}.mp4"
-        return styled_loop if styled_loop.exists() else unstyled_loop
     return None
 
 
@@ -275,7 +273,7 @@ async def create_job(
     orbit_mode: str = Form("horizontal"),
     orbit_direction: int = Form(1),
     orbit_easing: Optional[str] = Form(None),
-    loop_mode: str = Form("standard"),
+    model_tier: str = Form("premium"),
 ):
     if preview_id:
         matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
@@ -338,6 +336,7 @@ async def create_job(
 
     parsed_orbit_mode = orbit_mode if orbit_mode in ("horizontal", "vertical") else "horizontal"
     parsed_orbit_direction = orbit_direction if orbit_direction in (1, -1) else 1
+    parsed_model_tier = model_tier if model_tier in ("standard", "high_quality", "premium") else "premium"
 
     asyncio.create_task(
         _run_pipeline(
@@ -354,6 +353,7 @@ async def create_job(
             orbit_mode=parsed_orbit_mode,
             orbit_direction=parsed_orbit_direction,
             orbit_easing=parsed_orbit_easing,
+            model_tier=parsed_model_tier,
         )
     )
 
@@ -390,6 +390,7 @@ async def approve_job(
     component_rows: Optional[str] = Form(None),
     style_prompt: Optional[str] = Form(None),
     selected_variants: Optional[str] = Form(None),
+    model_tier: Optional[str] = Form(None),
 ):
     job = jobs.get_job(job_id)
     if job is None:
@@ -402,16 +403,20 @@ async def approve_job(
 
     import json as _json
     style_overrides = None
-    if component_rows is not None:
-        try:
-            parsed_override_rows: list[dict] = _json.loads(component_rows)
-            if not isinstance(parsed_override_rows, list):
+    if component_rows is not None or model_tier is not None:
+        parsed_override_rows: list[dict] = []
+        if component_rows is not None:
+            try:
+                parsed_override_rows = _json.loads(component_rows)
+                if not isinstance(parsed_override_rows, list):
+                    parsed_override_rows = []
+            except Exception:
                 parsed_override_rows = []
-        except Exception:
-            parsed_override_rows = []
+        tier_value = model_tier if model_tier in ("standard", "high_quality", "premium") else None
         style_overrides = {
             "rows": parsed_override_rows,
             "style_prompt": style_prompt or "",
+            "model_tier": tier_value,
         }
 
     variants = None
@@ -446,22 +451,6 @@ def get_base_video_variant(job_id: str, variant: str):
 def get_base_video(job_id: str):
     """Legacy endpoint -- serves the longest-axis variant."""
     return get_base_video_variant(job_id, "longest")
-
-
-@app.get("/jobs/{job_id}/loop_video/{variant}")
-def get_loop_video(job_id: str, variant: str):
-    if variant not in VARIANT_NAMES:
-        raise HTTPException(status_code=400, detail=f"Unknown variant: {variant}")
-    job = jobs.get_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    # Prefer the styled loop if it exists; fall back to unstyled.
-    styled_loop = UPLOAD_DIR / job_id / f"final_loop_video_{variant}.mp4"
-    unstyled_loop = UPLOAD_DIR / job_id / f"loop_video_{variant}.mp4"
-    path = styled_loop if styled_loop.exists() else unstyled_loop
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Loop video not ready")
-    return FileResponse(str(path), media_type="video/mp4")
 
 
 @app.get("/jobs/{job_id}/video/{variant}")
@@ -525,7 +514,7 @@ def _save_job_render(
     """
     if variant not in VARIANT_NAMES:
         raise HTTPException(status_code=422, detail=f"Unknown variant: {variant}")
-    if kind not in {"base", "styled", "loop"}:
+    if kind not in {"base", "styled"}:
         raise HTTPException(status_code=422, detail=f"Unsupported kind for save: {kind}")
 
     video_path = _job_output_path(job_id, variant, kind)
@@ -615,7 +604,7 @@ def replace_gallery_item(
     )
 
     gallery_store.delete_item(replace_id)
-    if victim["kind"] == "stitched":
+    if victim["kind"] in ("stitched", "loop"):
         try:
             Path(victim["video_path"]).unlink(missing_ok=True)
             if victim.get("thumbnail_path"):
@@ -688,8 +677,8 @@ def delete_gallery_item(item_id: str):
     if item is None:
         raise HTTPException(status_code=404, detail="Gallery item not found")
     gallery_store.delete_item(item_id)
-    # Stitched items own their files — clean up on deletion.
-    if item["kind"] == "stitched":
+    # Stitched and loop items own their files — clean up on deletion.
+    if item["kind"] in ("stitched", "loop"):
         try:
             Path(item["video_path"]).unlink(missing_ok=True)
             if item.get("thumbnail_path"):
@@ -847,6 +836,66 @@ def stitch_gallery_items(
     return item
 
 
+@app.post("/gallery/{item_id}/loop", status_code=201)
+async def create_gallery_loop(item_id: str, title: Optional[str] = Form(None)):
+    """Palindrome-loop an existing gallery item into a new 6s seamless loop.
+
+    Runs ffmpeg reverse+concat on the source video, writes a new file owned by
+    the gallery (cleaned up on delete), and registers it as a kind='loop' item.
+    Respects the current tier cap.
+    """
+    source = gallery_store.get_item(item_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    if source["kind"] == "loop":
+        raise HTTPException(status_code=409, detail="Item is already a loop")
+
+    source_path = Path(source["video_path"])
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Source video file missing on disk")
+
+    cap = _current_cap()
+    count = gallery_store.count()
+    if count >= cap:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "gallery_full",
+                "saved_count": count,
+                "cap": cap,
+                "tier": _current_tier(),
+            },
+        )
+
+    loop_id = str(uuid.uuid4())
+    out_path = LOOP_DIR / f"{loop_id}.mp4"
+
+    from pipeline.phase3_assemble import FrameAssembler
+    assembler = FrameAssembler()
+    try:
+        await asyncio.to_thread(assembler.reverse_and_concat, source_path, out_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Loop creation failed: {exc}")
+
+    default_title = (title or "").strip()[:120] or f"{source['title']} · 6s loop"
+    item = _register_gallery_video(
+        video_path=out_path,
+        kind="loop",
+        title=default_title,
+        job_id=source.get("job_id"),
+        variant=source.get("variant"),
+        metadata={
+            "source_id": item_id,
+            "source_kind": source["kind"],
+            "saved_at": time.time(),
+        },
+    )
+    if item is None:
+        out_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail="Failed to register loop item")
+    return item
+
+
 # ────────────────────────────────────────────────────────────────────────────
 # Restyle + pipeline
 # ────────────────────────────────────────────────────────────────────────────
@@ -858,6 +907,7 @@ async def restyle_job(
     component_rows: str = Form("[]"),
     style_prompt: str = Form(""),
     selected_variants: str = Form("x,y,z"),
+    model_tier: str = Form("premium"),
 ):
     source_job = jobs.get_job(job_id)
     if source_job is None:
@@ -888,8 +938,9 @@ async def restyle_job(
     for v in available:
         _shutil.copy2(source_dir / f"base_video_{v}.mp4", new_dir / f"base_video_{v}.mp4")
 
+    parsed_tier = model_tier if model_tier in ("standard", "high_quality", "premium") else "premium"
     asyncio.create_task(
-        _run_phase4_only(new_job_id, parsed_rows, style_prompt, available)
+        _run_phase4_only(new_job_id, parsed_rows, style_prompt, available, parsed_tier)
     )
 
     return {"job_id": new_job_id}
@@ -900,6 +951,7 @@ async def _run_phase4_only(
     rows: list[dict],
     style_prompt: str,
     variants: list[str],
+    model_tier: str = "premium",
 ) -> None:
     output_dir = UPLOAD_DIR / job_id
     try:
@@ -923,6 +975,7 @@ async def _run_phase4_only(
                 output_dir / f"base_video_{v}.mp4",
                 fal_prompt,
                 output_dir / f"final_video_{v}.mp4",
+                model_tier=model_tier,
             )
             for v in variants
             if (output_dir / f"base_video_{v}.mp4").exists()
@@ -931,39 +984,16 @@ async def _run_phase4_only(
         if style_tasks:
             await asyncio.gather(*style_tasks)
 
-        # Styled loops + gallery auto-save for the restyle flow.
-        from pipeline.phase3_assemble import FrameAssembler as _FA
-        loop_assembler = _FA()
-        loop_tasks = []
+        # Gallery auto-save for the restyle flow. Loops are produced on demand
+        # from a gallery item — no longer generated at render time.
         for variant in variants:
             styled_path = output_dir / f"final_video_{variant}.mp4"
-            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
-            if styled_path.exists():
-                loop_tasks.append(
-                    asyncio.to_thread(
-                        loop_assembler.reverse_and_concat,
-                        styled_path, styled_loop_path,
-                    )
-                )
-        if loop_tasks:
-            await asyncio.gather(*loop_tasks, return_exceptions=True)
-
-        for variant in variants:
-            styled_path = output_dir / f"final_video_{variant}.mp4"
-            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
             if styled_path.exists():
                 _register_gallery_video(
                     video_path=styled_path, kind="styled",
                     title=f"Restyle · {variant.upper()} axis",
                     job_id=job_id, variant=variant,
                     metadata={"style_prompt": style_prompt, "style": "styled", "restyle": True},
-                )
-            if styled_loop_path.exists():
-                _register_gallery_video(
-                    video_path=styled_loop_path, kind="loop",
-                    title=f"Restyle 6s loop · {variant.upper()} axis",
-                    job_id=job_id, variant=variant,
-                    metadata={"source": "styled", "style": "styled", "restyle": True},
                 )
 
         jobs.update_phase(job_id, 4, "done")
@@ -989,6 +1019,7 @@ async def _run_pipeline(
     orbit_mode: str = "horizontal",
     orbit_direction: int = 1,
     orbit_easing: list[float] | None = None,
+    model_tier: str = "premium",
 ) -> None:
     _variants = variants_to_render or list(VARIANT_NAMES)
     output_dir = UPLOAD_DIR / job_id
@@ -1049,15 +1080,6 @@ async def _run_pipeline(
         ]
         await asyncio.gather(*assemble_tasks)
 
-        loop_tasks = [
-            asyncio.to_thread(
-                assembler.reverse_and_concat,
-                output_dir / f"base_video_{v}.mp4",
-                output_dir / f"loop_video_{v}.mp4",
-            )
-            for v in _variants
-        ]
-        await asyncio.gather(*loop_tasks)
         jobs.update_phase(job_id, 3, "done")
 
         # Renders are served from the job directory; the client must
@@ -1076,6 +1098,9 @@ async def _run_pipeline(
             if overrides:
                 rows = overrides.get("rows") or rows
                 style_prompt = overrides.get("style_prompt", style_prompt)
+                override_tier = overrides.get("model_tier")
+                if override_tier in ("standard", "high_quality", "premium"):
+                    model_tier = override_tier
 
             selected = jobs.get_approval_variants(job_id)
 
@@ -1102,31 +1127,15 @@ async def _run_pipeline(
             base_path = output_dir / f"base_video_{variant}.mp4"
             final_path = output_dir / f"final_video_{variant}.mp4"
             if base_path.exists():
-                style_tasks.append(editor.edit(base_path, fal_prompt, final_path))
+                style_tasks.append(
+                    editor.edit(base_path, fal_prompt, final_path, model_tier=model_tier)
+                )
 
         if style_tasks:
             await asyncio.gather(*style_tasks)
 
-        # Produce styled 6-second loops (reverse + concat) for every styled
-        # variant, then register both the styled and its loop into the gallery.
-        from pipeline.phase3_assemble import FrameAssembler as _FA
-        loop_assembler = _FA()
-        styled_loop_tasks = []
-        for variant in selected:
-            styled_path = output_dir / f"final_video_{variant}.mp4"
-            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
-            if styled_path.exists():
-                styled_loop_tasks.append(
-                    asyncio.to_thread(
-                        loop_assembler.reverse_and_concat,
-                        styled_path, styled_loop_path,
-                    )
-                )
-        if styled_loop_tasks:
-            await asyncio.gather(*styled_loop_tasks, return_exceptions=True)
-
-        # Styled renders + loops stay on disk under jobs/{id}/ until the
-        # client saves them via POST /gallery.
+        # Styled renders stay on disk under jobs/{id}/ until the client saves
+        # them via POST /gallery. Loops are produced on demand from the gallery.
         jobs.update_phase(job_id, 4, "done")
         jobs.mark_done(job_id, ai_styled=len(style_tasks) > 0)
 

@@ -2,6 +2,22 @@
 import { useState } from 'react'
 import type { StyleOptions, Row } from '../App'
 
+export function CreditIcon({ size = 12 }: { size?: number }) {
+  return (
+    <svg
+      className="credit-icon"
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden
+    >
+      <rect x="2" y="2" width="12" height="12" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="5.5" y="5.5" width="5" height="5" rx="0.5" fill="currentColor" />
+    </svg>
+  )
+}
+
 const MAX_SHARED_CHARS = 800
 const MAX_ROWS = 20
 

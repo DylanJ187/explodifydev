@@ -4,11 +4,12 @@ import { useNavigate } from 'react-router-dom'
 import {
   listGallery, deleteGalleryItem, renameGalleryItem,
   stitchGalleryItems, galleryVideoUrl, galleryThumbnailUrl,
-  toggleFavorite,
+  toggleFavorite, createGalleryLoop,
 } from '../api/client'
 import type { GalleryItem, GalleryKind } from '../api/client'
 import { CustomVideoPlayer } from './CustomVideoPlayer'
 import { ConfirmModal, PromptModal } from './shell/Modal'
+import { PricingModal } from './shell/PricingModal'
 
 type FilterKey = 'all' | 'recent' | 'favorites' | GalleryKind
 
@@ -67,6 +68,7 @@ export function Gallery() {
   const [renameTarget, setRenameTarget] = useState<GalleryItem | null>(null)
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [loopingId, setLoopingId] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -226,6 +228,19 @@ export function Gallery() {
     }
   }
 
+  async function handleCreateLoop(item: GalleryItem) {
+    if (loopingId) return
+    setLoopingId(item.id)
+    try {
+      await createGalleryLoop(item.id)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Loop creation failed')
+    } finally {
+      setLoopingId(null)
+    }
+  }
+
   async function submitRename(next: string) {
     const item = renameTarget
     if (!item) return
@@ -329,11 +344,13 @@ export function Gallery() {
                 mode={viewMode}
                 selected={selection.includes(item.id)}
                 selectionIndex={selection.indexOf(item.id)}
+                looping={loopingId === item.id}
                 onToggleSelect={() => toggleSelect(item.id)}
                 onPreview={() => setPreviewItem(item)}
                 onDelete={() => setDeleteTarget(item)}
                 onRename={() => setRenameTarget(item)}
                 onToggleFavorite={() => handleToggleFavorite(item)}
+                onCreateLoop={() => handleCreateLoop(item)}
               />
             ))}
           </div>
@@ -463,18 +480,20 @@ function EmptyState({ onStart }: { onStart: () => void }) {
 // ─── Card ───────────────────────────────────────────────────────────────────
 
 function ProjectCard({
-  item, mode, selected, selectionIndex,
-  onToggleSelect, onPreview, onDelete, onRename, onToggleFavorite,
+  item, mode, selected, selectionIndex, looping,
+  onToggleSelect, onPreview, onDelete, onRename, onToggleFavorite, onCreateLoop,
 }: {
   item: GalleryItem
   mode: 'grid' | 'list'
   selected: boolean
   selectionIndex: number
+  looping: boolean
   onToggleSelect: () => void
   onPreview: () => void
   onDelete: () => void
   onRename: () => void
   onToggleFavorite: () => void
+  onCreateLoop: () => void
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [hovering, setHovering] = useState(false)
@@ -558,6 +577,18 @@ function ProjectCard({
           <span>{selected ? 'Stitching' : 'Stitch'}</span>
         </button>
         <div className="project-card-icon-group">
+          {item.kind !== 'loop' && (
+            <button
+              type="button"
+              className={`project-card-icon-btn ${looping ? 'project-card-icon-btn--busy' : ''}`}
+              onClick={onCreateLoop}
+              disabled={looping}
+              aria-label="Create 6s loop"
+              title="Create 6s loop"
+            >
+              <IconLoop />
+            </button>
+          )}
           <a
             className="project-card-icon-btn"
             href={galleryVideoUrl(item.id)}
@@ -664,6 +695,22 @@ function IconStitch() {
   )
 }
 
+function IconLoop() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+      <path
+        d="M3 5.5 A4.5 4.5 0 0 1 12.5 5.5 M13 10.5 A4.5 4.5 0 0 1 3.5 10.5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+      <path d="M11 3.5 L12.5 5.5 L14 3.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5 12.5 L3.5 10.5 L2 12.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 // ─── Stitcher drawer ────────────────────────────────────────────────────────
 
 function StitchBar({
@@ -741,6 +788,7 @@ function StitchBar({
 // ─── Preview modal ──────────────────────────────────────────────────────────
 
 function PreviewModal({ item, onClose }: { item: GalleryItem; onClose: () => void }) {
+  const [pricingOpen, setPricingOpen] = useState(false)
   return (
     <div className="gallery-modal" onClick={onClose}>
       <div className="gallery-modal-content" onClick={e => e.stopPropagation()}>
@@ -755,9 +803,11 @@ function PreviewModal({ item, onClose }: { item: GalleryItem; onClose: () => voi
             canDownload={false}
             autoPlay={true}
             loop={true}
+            onUpgradeClick={() => setPricingOpen(true)}
           />
         </div>
       </div>
+      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
     </div>
   )
 }

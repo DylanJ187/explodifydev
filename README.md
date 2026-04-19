@@ -169,14 +169,19 @@ VITE_SUPABASE_ANON_KEY=...
 
 ## Credits & plans
 
-| Plan | Price | Credits / month | Premium renders | HQ renders | Standard renders |
-| --- | --- | --- | --- | --- | --- |
-| Free | £0 | 30 | 1 | 2 | 6 |
-| Pro | £29.99 | 450 | 15 | 30 | 90 |
-| Studio | £49.99 | 900 | 30 | 60 | 180 |
-| Top-up pack | £14.99 (one-time) | 150 | 5 | 10 | 30 |
+Canonical pricing lives in the vault at `explodify/pricing-model.md`. We set prices explicitly per currency in Stripe (no runtime FX), detect the customer's currency from `CF-IPCountry`, and let them override via a footer picker.
 
-Cost model: 1 Premium = 30 credits = 2 HQ = 6 Standard.
+Quick reference (6 launch currencies — USD, EUR, GBP, CAD, AUD, JPY):
+
+| Plan | USD | EUR | GBP | CAD | AUD | JPY | Credits | Premium / HQ / Std |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Free | — | — | — | — | — | — | 30 (watermarked) | 1 / 2 / 6 |
+| Starter (one-time) | $9.99 | €9.99 | £6.99 | C$12.99 | A$14.99 | ¥1,490 | 60 | 2 / 4 / 12 |
+| Standard (one-time) | $19.99 | €19.99 | £14.99 | C$24.99 | A$29.99 | ¥2,990 | 150 | 5 / 10 / 30 |
+| Pro (/mo) | $29.99 | €29.99 | £29.99 | C$39.99 | A$44.99 | ¥4,490 | 450 / mo | 15 / 30 / 90 |
+| Studio (/mo) | $49.99 | €49.99 | £49.99 | C$64.99 | A$74.99 | ¥7,490 | 900 / mo | 30 / 60 / 180 |
+
+Cost model: 1 Premium = 30 credits = 2 HQ = 6 Standard. Any paid SKU unlocks unwatermarked-forever on first purchase (durable across sub cancellation).
 
 ---
 

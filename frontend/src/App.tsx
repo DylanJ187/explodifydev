@@ -12,7 +12,6 @@ import { LoadingOutput } from './components/LoadingOutput'
 import { VideoOutput } from './components/VideoOutput'
 import { CustomVideoPlayer } from './components/CustomVideoPlayer'
 import { SaveToGalleryButton } from './components/SaveToGalleryButton'
-import { LoopModeSelector } from './components/LoopModeSelector'
 import { TopNav } from './components/TopNav'
 import type { NavTab } from './components/TopNav'
 import CreditsBlocks from './components/shell/CreditsBlocks'
@@ -22,7 +21,11 @@ import { Profile } from './components/Profile'
 import { JobQueueProvider, useJobQueue } from './contexts/JobQueueContext'
 import { JobQueueIndicator } from './components/JobQueueIndicator'
 import { getPreviewImages, createJob, getJobStatus, approvePhase4, restyleJob } from './api/client'
-import type { JobStatus, LoopMode, PreviewResult, VariantName } from './api/client'
+import type { JobStatus, ModelTier, PreviewResult, VariantName } from './api/client'
+import { ConfirmCreditsModal, shouldSkipConfirm, setSkipConfirm } from './components/ConfirmCreditsModal'
+import { ProceedToStyleButton } from './components/ProceedToStyleButton'
+import { ModelSelector } from './components/ModelSelector'
+import { PricingModal } from './components/shell/PricingModal'
 import RequireAuth from './routes/RequireAuth'
 import RootRedirect from './routes/RootRedirect'
 import { useActiveTab, pathForTab } from './routes/useActiveTab'
@@ -104,7 +107,10 @@ function AppInner() {
   const [orbitMode, setOrbitMode] = useState<OrbitMode>('horizontal')
   const [orbitDirection, setOrbitDirection] = useState<OrbitDirection>(1)
   const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(DEFAULT_ORBIT_EASING)
-  const [loopMode, setLoopMode] = useState<LoopMode>('loop-preview')
+  const [modelTier, setModelTier] = useState<ModelTier>('premium')
+  const [pendingApprove, setPendingApprove] = useState<null | { variants: VariantName[] }>(null)
+  const creditsRemaining = 30
+  const creditsTotal = 30
   const { enqueue: enqueueJob } = useJobQueue()
   const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode; orbitDirection: OrbitDirection } | null>(null)
   const [restyleStack, setRestyleStack] = useState<RestyleEntry[]>([])
@@ -173,7 +179,7 @@ function AppInner() {
         orbitDirection,
         orbitEasingCurve,
         variantsToRender,
-        loopMode,
+        modelTier,
       })
       setJobId(id)
       setJobStatus(null)
@@ -226,6 +232,7 @@ function AppInner() {
         rows: opts.rows,
         stylePrompt: opts.prompt,
         selectedVariants: variants,
+        modelTier,
       })
       setRestyleStack(prev => [
         { jobId: newJobId, status: 'generating', variants, aiStyled: false },
@@ -271,6 +278,7 @@ function AppInner() {
       await approvePhase4(jobId, variants, {
         rows: styleOptions.rows,
         stylePrompt: styleOptions.prompt,
+        modelTier,
       })
       setState('styling')
     } catch (err) {
@@ -303,6 +311,7 @@ function AppInner() {
 
   const showControls = state === 'orientation' || state === 'processing' || state === 'awaiting_approval' || state === 'styling' || state === 'done'
   const controlsDisabled = state !== 'orientation' && state !== 'awaiting_approval'
+  const styleDisabled = state !== 'orientation' && state !== 'processing' && state !== 'awaiting_approval'
 
   const topbar = (
     <header className="app-topbar" role="banner">
@@ -330,8 +339,8 @@ function AppInner() {
 
       <div className="app-topbar-meta">
         <CreditsBlocks
-          remaining={30}
-          total={30}
+          remaining={creditsRemaining}
+          total={creditsTotal}
           onClick={() => navigate(pathForTab('profile'))}
         />
       </div>
@@ -393,7 +402,7 @@ function AppInner() {
                 <StylePanel
                   options={styleOptions}
                   onOptionsChange={setStyleOptions}
-                  disabled={controlsDisabled}
+                  disabled={styleDisabled}
                 />
               </section>
 
@@ -418,14 +427,6 @@ function AppInner() {
                     />
                   </section>
 
-                  <section className="panel-section animate-fade-in">
-                    <div className="section-label">Loop Mode</div>
-                    <LoopModeSelector
-                      value={loopMode}
-                      onChange={setLoopMode}
-                      disabled={false}
-                    />
-                  </section>
                 </>
               )}
 
@@ -439,24 +440,35 @@ function AppInner() {
               )}
 
               {state === 'awaiting_approval' && (
-                <section className="panel-section animate-fade-in">
-                  {settingsChanged ? (
-                    <>
-                      <div className="settings-changed-indicator">
-                        Settings changed
+                <>
+                  <section className="panel-section animate-fade-in">
+                    <div className="section-label">Render Quality</div>
+                    <ModelSelector
+                      modelTier={modelTier}
+                      onModelTierChange={setModelTier}
+                      creditsRemaining={creditsRemaining}
+                    />
+                  </section>
+
+                  <section className="panel-section animate-fade-in">
+                    {settingsChanged ? (
+                      <>
+                        <div className="settings-changed-indicator">
+                          Settings changed
+                        </div>
+                        <button className="generate-btn" onClick={() => handleGenerate()}>
+                          Re-render
+                          <span className="generate-arrow">→</span>
+                        </button>
+                      </>
+                    ) : (
+                      <div className="done-indicator">
+                        <span>✓</span>
+                        Render ready
                       </div>
-                      <button className="generate-btn" onClick={() => handleGenerate()}>
-                        Re-render
-                        <span className="generate-arrow">→</span>
-                      </button>
-                    </>
-                  ) : (
-                    <div className="done-indicator">
-                      <span>✓</span>
-                      Render ready
-                    </div>
-                  )}
-                </section>
+                    )}
+                  </section>
+                </>
               )}
 
               {state === 'styling' && (
@@ -535,8 +547,15 @@ function AppInner() {
           <DualApprovalGate
             jobId={jobId}
             selectedVariant={selectedVariant}
-            loopMode={loopMode}
-            onApprove={handleApprove}
+            modelTier={modelTier}
+            creditsRemaining={creditsRemaining}
+            onApprove={(variants) => {
+              if (shouldSkipConfirm()) {
+                handleApprove(variants)
+              } else {
+                setPendingApprove({ variants })
+              }
+            }}
             onAdjust={() => setState('orientation')}
             onSkip={reset}
           />
@@ -554,7 +573,6 @@ function AppInner() {
             styleOptions={styleOptions}
             restyleStack={restyleStack}
             onRestyle={handleRestyle}
-            loopMode={loopMode}
           />
         )}
 
@@ -565,6 +583,18 @@ function AppInner() {
         )}
       </main>
       </div>
+      <ConfirmCreditsModal
+        open={pendingApprove !== null}
+        modelTier={modelTier}
+        creditsRemaining={creditsRemaining}
+        onCancel={() => setPendingApprove(null)}
+        onConfirm={(dontAskAgain) => {
+          const pending = pendingApprove
+          setPendingApprove(null)
+          if (dontAskAgain) setSkipConfirm(true)
+          if (pending) handleApprove(pending.variants)
+        }}
+      />
     </div>
   )
 }
@@ -574,25 +604,25 @@ function AppInner() {
 function DualApprovalGate({
   jobId,
   selectedVariant,
-  loopMode,
+  modelTier,
+  creditsRemaining,
   onApprove,
   onAdjust,
   onSkip,
 }: {
   jobId: string
   selectedVariant: VariantName
-  loopMode: LoopMode
+  modelTier: ModelTier
+  creditsRemaining: number
   onApprove: (variants: VariantName[]) => void
   onAdjust: () => void
   onSkip: () => void
 }) {
-  const isLoop = loopMode === 'loop-preview'
-  const videoUrl = isLoop
-    ? `/jobs/${jobId}/loop_video/${selectedVariant}`
-    : `/jobs/${jobId}/base_video/${selectedVariant}`
-  const downloadName = `explodify_${selectedVariant}_${isLoop ? 'loop' : 'base'}_${jobId}.mp4`
-  const durationLabel = isLoop ? '6S SEAMLESS LOOP' : '3S @ 24FPS'
-  const frameLabel = isLoop ? '144 FRAMES' : '72 FRAMES'
+  const videoUrl = `/jobs/${jobId}/base_video/${selectedVariant}`
+  const downloadName = `explodify_${selectedVariant}_base_${jobId}.mp4`
+  const durationLabel = '3S @ 24FPS'
+  const frameLabel = '72 FRAMES'
+  const [pricingOpen, setPricingOpen] = useState(false)
 
   return (
     <div className="review-gate animate-fade-in">
@@ -618,19 +648,18 @@ function DualApprovalGate({
             canDownload={false}
             autoPlay
             loop
+            onUpgradeClick={() => setPricingOpen(true)}
           />
         </div>
       </div>
 
       <div className="review-actions">
         <div className="review-actions-left">
-          <button
-            className="review-proceed-btn"
-            onClick={() => onApprove([selectedVariant])}
-          >
-            <span className="review-proceed-label">Style This Video</span>
-            <span className="review-proceed-arrow">→</span>
-          </button>
+          <ProceedToStyleButton
+            modelTier={modelTier}
+            creditsRemaining={creditsRemaining}
+            onProceed={() => onApprove([selectedVariant])}
+          />
           <SaveToGalleryButton
             jobId={jobId}
             variant={selectedVariant}
@@ -645,6 +674,7 @@ function DualApprovalGate({
           </button>
         </div>
       </div>
+      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
     </div>
   )
 }

@@ -11,6 +11,7 @@ import {
   updateAccount,
 } from '../api/client'
 import { ConfirmModal } from './shell/Modal'
+import { PricingCards } from './shell/PricingModal'
 
 type SectionId =
   | 'general'
@@ -33,57 +34,6 @@ const RAIL: RailItem[] = [
   { id: 'notifications', index: '04', label: 'Notifications',      hint: 'Render & account alerts' },
   { id: 'privacy',       index: '05', label: 'Privacy & Security', hint: 'Data, sessions, deletion' },
 ]
-
-// ── Pricing (Obsidian-style: honest, single line of fees) ───────────────────
-
-interface PlanOffer {
-  id: 'pro' | 'studio'
-  label: string
-  tagline: string
-  price: string
-  cadence: string
-  credits: number
-  creditsCadence: string
-  accent: 'amber' | 'teal'
-  bullets: { premium: number; hq: number; standard: number }
-}
-
-const UPGRADE_PLANS: PlanOffer[] = [
-  {
-    id: 'pro',
-    label: 'Pro',
-    tagline: 'For freelancers & solo studios',
-    price: '£29.99',
-    cadence: '/mo',
-    credits: 450,
-    creditsCadence: 'credits / month',
-    accent: 'amber',
-    bullets: { premium: 15, hq: 30, standard: 90 },
-  },
-  {
-    id: 'studio',
-    label: 'Studio',
-    tagline: 'For agencies & production teams',
-    price: '£49.99',
-    cadence: '/mo',
-    credits: 900,
-    creditsCadence: 'credits / month',
-    accent: 'teal',
-    bullets: { premium: 30, hq: 60, standard: 180 },
-  },
-]
-
-const TOPUP_PACK = {
-  label: 'Top-up pack',
-  tagline: 'One-time purchase',
-  price: '£14.99',
-  cadence: 'one-time',
-  credits: 150,
-  creditsCadence: 'credits · no expiry',
-  premium: 5,
-  hq: 10,
-  standard: 30,
-}
 
 const AXIS_OPTIONS: Array<{ value: 'x' | 'y' | 'z'; label: string }> = [
   { value: 'x', label: 'X axis' },
@@ -401,83 +351,11 @@ export function Profile() {
               </div>
             </div>
 
-            <div className="settings-upgrade-grid settings-upgrade-grid--three">
-              <article className="settings-upgrade-card" data-accent="slate">
-                <span className="settings-upgrade-kind t-mono-label">One-time</span>
-                <div className="settings-upgrade-head">
-                  <span className="settings-upgrade-label">{TOPUP_PACK.label}</span>
-                  <span className="settings-upgrade-tagline">{TOPUP_PACK.tagline}</span>
-                </div>
-                <div className="settings-upgrade-price">
-                  <span className="settings-upgrade-price-num">{TOPUP_PACK.price}</span>
-                  <span className="settings-upgrade-price-cadence">{TOPUP_PACK.cadence}</span>
-                </div>
-                <div className="settings-upgrade-credits">
-                  <span className="settings-upgrade-credits-num">{TOPUP_PACK.credits}</span>
-                  <span className="settings-upgrade-credits-cadence">{TOPUP_PACK.creditsCadence}</span>
-                </div>
-                <ul className="settings-upgrade-bullets">
-                  <li>
-                    <span className="settings-upgrade-num">{TOPUP_PACK.premium}</span>
-                    <span>Premium renders</span>
-                  </li>
-                  <li>
-                    <span className="settings-upgrade-num">{TOPUP_PACK.hq}</span>
-                    <span>High Quality renders</span>
-                  </li>
-                  <li>
-                    <span className="settings-upgrade-num">{TOPUP_PACK.standard}</span>
-                    <span>Standard renders</span>
-                  </li>
-                </ul>
-                <button
-                  type="button"
-                  className="settings-btn"
-                  onClick={() => flash('Top-up requires billing — coming soon')}
-                >
-                  Buy top-up <span aria-hidden>→</span>
-                </button>
-              </article>
-
-              {!isSubscriber && UPGRADE_PLANS.map(plan => (
-                <article key={plan.id} className="settings-upgrade-card" data-accent={plan.accent}>
-                  <span className="settings-upgrade-kind t-mono-label">Monthly</span>
-                  <div className="settings-upgrade-head">
-                    <span className="settings-upgrade-label">{plan.label}</span>
-                    <span className="settings-upgrade-tagline">{plan.tagline}</span>
-                  </div>
-                  <div className="settings-upgrade-price">
-                    <span className="settings-upgrade-price-num">{plan.price}</span>
-                    <span className="settings-upgrade-price-cadence">{plan.cadence}</span>
-                  </div>
-                  <div className="settings-upgrade-credits">
-                    <span className="settings-upgrade-credits-num">{plan.credits}</span>
-                    <span className="settings-upgrade-credits-cadence">{plan.creditsCadence}</span>
-                  </div>
-                  <ul className="settings-upgrade-bullets">
-                    <li>
-                      <span className="settings-upgrade-num">{plan.bullets.premium}</span>
-                      <span>Premium renders</span>
-                    </li>
-                    <li>
-                      <span className="settings-upgrade-num">{plan.bullets.hq}</span>
-                      <span>High Quality renders</span>
-                    </li>
-                    <li>
-                      <span className="settings-upgrade-num">{plan.bullets.standard}</span>
-                      <span>Standard renders</span>
-                    </li>
-                  </ul>
-                  <button
-                    type="button"
-                    className="settings-btn"
-                    onClick={() => flash('Upgrades require billing — coming soon')}
-                  >
-                    Choose {plan.label} <span aria-hidden>→</span>
-                  </button>
-                </article>
-              ))}
-            </div>
+            <PricingCards
+              hideSubscriptions={isSubscriber}
+              onBuyPack={pack => flash(`${pack.label} requires billing — coming soon`)}
+              onChoosePlan={() => flash('Upgrades require billing — coming soon')}
+            />
           </section>
 
           )}

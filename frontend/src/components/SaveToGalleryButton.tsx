@@ -8,7 +8,7 @@ import {
 import { useSavedCount, publishSavedCount } from '../lib/useSavedCount'
 import { CapacityModal } from './shell/CapacityModal'
 
-type SaveKind = 'base' | 'styled' | 'loop'
+type SaveKind = 'base' | 'styled'
 
 interface Props {
   jobId: string

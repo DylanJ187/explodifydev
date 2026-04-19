@@ -1,70 +1,66 @@
 # pipeline/prompt_interpreter.py
 """Prompt interpreter for Phase 4 (Kling o1 video-to-video edit).
 
-Kling o1 controls fidelity entirely through the prompt — there is no
-strength/guidance parameter.  The strategy here is:
-
-  - Lead with a hard geometry-lock: Kling must preserve all motion and
-    structure; it is only allowed to change surface appearance.
-  - Describe materials concisely as "Component is material" pairs.
-  - Append optional user style notes (lighting, mood, backdrop).
-  - Close with a short reinforcement of the geometry lock.
-  - Keep total length well under the ~2500 char limit.
+Kling o1 has no strength/guidance parameter — fidelity is controlled purely by
+the prompt. Structure: geometry lock, render style, materials, optional user
+notes. Kept compact to minimise tokens while covering every constraint once.
 """
 from __future__ import annotations
 
 
-# ---------------------------------------------------------------------------
-# Geometry lock
-# ---------------------------------------------------------------------------
-
-_GEOMETRY_LOCK_OPEN = (
-    "SURFACE RESTYLE ONLY. "
-    "Do not alter any geometry, part shape, part count, spatial layout, "
-    "motion path, camera angle, or timing. "
-    "Every component must remain in exactly the same position and move along "
-    "exactly the same trajectory as in the source video."
+_GEOMETRY_LOCK = (
+    "STRICT SURFACE-ONLY RESTYLE. This is a pixel-accurate material remap, "
+    "not a regeneration. Do not modify geometry, part count, individual part "
+    "shapes, relative positions, motion paths, explosion trajectory, camera "
+    "angle, orbit arc, or frame timing — every pixel of silhouette and every "
+    "axis of movement must match the source. Only surface appearance "
+    "(colour, material, shading) may change. Output must be frame-for-frame "
+    "aligned to the input."
 )
-
-_GEOMETRY_LOCK_CLOSE = (
-    "Output must be frame-for-frame identical in structure and motion to the input."
-)
-
-
-# ---------------------------------------------------------------------------
-# Default material when user provides none
-# ---------------------------------------------------------------------------
-
-_DEFAULT_MATERIAL = (
-    "Physically based materials: machined aluminium with Fresnel highlights, "
-    "matte injection-moulded plastic, rubber with micro-texture grain."
-)
-
-
-# ---------------------------------------------------------------------------
-# Base render style — injected before materials and user notes so Kling
-# anchors to the correct aesthetic reference before reading anything else.
-# ---------------------------------------------------------------------------
 
 _RENDER_STYLE = (
-    "Render quality: professional product visualisation, Blender Cycles standard. "
-    "Background: pure infinite void — solid colour or smooth gradient only, "
-    "no physical backdrop, no environment geometry, no edges or seams visible at any zoom level. "
-    "Lighting: clean area lights with soft shadow falloff, no ground shadow, no floor reflection. "
-    "No lens flare, no bloom, no glow, no chromatic aberration, no post-processing artifacts."
+    "Style: photoreal product visualisation, Blender Cycles quality — never cartoon or stylised. "
+    "Surfaces carry high-resolution micro-detail: visible grain, weave, brushed striations, "
+    "fingerprint-scale wear, fine specular highlights, subtle normal-map relief — "
+    "textures read as tactile and hand-crafted under close inspection. "
+    "Background: pure infinite void, solid colour or smooth gradient, no seams, horizon, or backdrop edges. "
+    "Lighting: soft area lights, no ground shadow, no floor reflection. "
+    "No lens flare, bloom, glow, motion blur, bokeh, or chromatic aberration. "
+    "Flicker-free exposure and materials across all frames."
 )
 
-# Closing constraints — bookend the prompt for reinforcement
-_CONSTRAINTS = (
-    "No lens flare, bloom, glow, motion blur, or bokeh of any kind. "
-    "Infinite void background — no backdrop edges under any circumstance. "
-    "Stable, flicker-free exposure and materials across all frames."
+_GEOMETRY_REASSERT = (
+    "Reminder: geometry, part count, positions, motion, camera trajectory, "
+    "and timing must remain frame-for-frame identical to the source. Style "
+    "notes above apply to surfaces only — never to geometry or motion."
+)
+
+_AUTO_MATERIALS_ALL = (
+    "Materials: identify the main body and each sub-component, then assign "
+    "coherent PBR materials inferred from shape and function (e.g. metal chassis, "
+    "rubber grips, glass lenses, painted plastic). Unified premium palette."
+)
+
+_AUTO_MATERIALS_PARTIAL = (
+    "For any unlisted component, infer a material that harmonises with the "
+    "specified ones — matching palette, finish, and realism."
+)
+
+_ATMOSPHERIC_BAN = (
+    "No smoke, dust, haze, fog, mist, steam, or atmospheric particles — "
+    "the air is perfectly clear."
+)
+
+_ATMOSPHERIC_TERMS = (
+    "smoke", "dust", "haze", "fog", "mist", "steam",
+    "atmospheric", "atmosphere", "particles", "volumetric", "god ray",
 )
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
+def _style_mentions_atmosphere(style_prompt: str) -> bool:
+    low = style_prompt.lower()
+    return any(term in low for term in _ATMOSPHERIC_TERMS)
+
 
 def build_fal_prompt(
     rows: list[dict] | None = None,
@@ -76,34 +72,31 @@ def build_fal_prompt(
         rows: List of dicts with 'part' and 'material' keys.
         style_prompt: Free-form style notes (lighting, backdrop, mood).
     """
-    sections: list[str] = [_GEOMETRY_LOCK_OPEN]
-    sections.append(_RENDER_STYLE)
-    sections.append(_build_rows_section(rows or []))
+    sections: list[str] = [_GEOMETRY_LOCK, _RENDER_STYLE, _build_rows_section(rows or [])]
+    if not _style_mentions_atmosphere(style_prompt):
+        sections.append(_ATMOSPHERIC_BAN)
     if style_prompt.strip():
         sections.append(style_prompt.strip())
-    sections.append(_CONSTRAINTS)
-    sections.append(_GEOMETRY_LOCK_CLOSE)
+    sections.append(_GEOMETRY_REASSERT)
     return " ".join(sections)
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 def _build_rows_section(rows: list[dict]) -> str:
-    """Serialise component/material rows into a concise prompt fragment.
-
-    Filters rows with no material. Falls back to the default material
-    description if no rows are filled.
-    """
-    filled = []
+    """Serialise component/material rows into a concise prompt fragment."""
+    filled: list[str] = []
+    unfilled_count = 0
     for i, row in enumerate(rows[:20]):
         part = (row.get("part") or "").strip() or f"Part {i + 1}"
         material = (row.get("material") or "").strip()
         if material:
             filled.append(f"{part} is {material}")
+        else:
+            unfilled_count += 1
 
     if not filled:
-        return _DEFAULT_MATERIAL
+        return _AUTO_MATERIALS_ALL
 
-    return "Components: " + ", ".join(filled) + "."
+    components = "Components: " + ", ".join(filled) + "."
+    if unfilled_count > 0:
+        return components + " " + _AUTO_MATERIALS_PARTIAL
+    return components

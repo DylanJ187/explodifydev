@@ -1,11 +1,12 @@
 // frontend/src/components/VideoOutput.tsx
 import { useState } from 'react'
 import type { ReactElement } from 'react'
-import type { LoopMode, VariantName } from '../api/client'
+import type { VariantName } from '../api/client'
 import type { StyleOptions, RestyleEntry } from '../App'
 import { StylePanel } from './StylePanel'
 import { CustomVideoPlayer } from './CustomVideoPlayer'
 import { SaveToGalleryButton } from './SaveToGalleryButton'
+import { PricingModal } from './shell/PricingModal'
 
 // TODO: wire to real auth/plan state — for now, treat all users as Free Tier.
 // Free tier blocks download & adds watermark to discourage redistribution.
@@ -18,7 +19,6 @@ interface Props {
   styleOptions: StyleOptions
   restyleStack: RestyleEntry[]
   onRestyle: (opts: StyleOptions, variants: VariantName[]) => void
-  loopMode: LoopMode
 }
 
 const VARIANT_LABELS: Record<VariantName, string> = {
@@ -36,7 +36,7 @@ function VideoPlayer({
   baseKind,
   saveTitle,
   stageOverlay,
-  defaultLoop = false,
+  onUpgradeClick,
 }: {
   jobId: string
   variant: VariantName
@@ -44,13 +44,9 @@ function VideoPlayer({
   baseKind: 'base' | 'styled'
   saveTitle?: string
   stageOverlay?: ReactElement | false
-  defaultLoop?: boolean
+  onUpgradeClick?: () => void
 }) {
-  const [showLoop, setShowLoop] = useState(defaultLoop)
-  const videoUrl = `/jobs/${jobId}/video/${variant}`
-  const loopUrl = `/jobs/${jobId}/loop_video/${variant}`
-  const src = showLoop ? loopUrl : videoUrl
-  const saveKind: 'base' | 'styled' | 'loop' = showLoop ? 'loop' : baseKind
+  const src = `/jobs/${jobId}/video/${variant}`
 
   return (
     <div className="video-variant-card">
@@ -60,17 +56,9 @@ function VideoPlayer({
           <SaveToGalleryButton
             jobId={jobId}
             variant={variant}
-            kind={saveKind}
+            kind={baseKind}
             title={saveTitle}
           />
-          <button
-            className={`video-loop-toggle ${showLoop ? 'video-loop-toggle--active' : ''}`}
-            onClick={() => setShowLoop(v => !v)}
-            aria-pressed={showLoop}
-          >
-            <span className="video-loop-toggle-dot" />
-            {showLoop ? '6s loop' : '3s one-shot'}
-          </button>
         </div>
       </div>
       <div className="video-hero-stage">
@@ -78,6 +66,7 @@ function VideoPlayer({
           src={src}
           downloadName={downloadName}
           canDownload={USER_CAN_DOWNLOAD}
+          onUpgradeClick={onUpgradeClick}
         />
         {stageOverlay}
       </div>
@@ -117,7 +106,15 @@ function SkeletonCard({ entry, generation }: { entry: RestyleEntry; generation: 
 
 // ─── Restyle done card ────────────────────────────────────────────────────────
 
-function RestyleCard({ entry, generation, defaultLoop }: { entry: RestyleEntry; generation: number; defaultLoop: boolean }) {
+function RestyleCard({
+  entry,
+  generation,
+  onUpgradeClick,
+}: {
+  entry: RestyleEntry
+  generation: number
+  onUpgradeClick?: () => void
+}) {
   if (entry.status === 'generating') {
     return <SkeletonCard entry={entry} generation={generation} />
   }
@@ -152,7 +149,7 @@ function RestyleCard({ entry, generation, defaultLoop }: { entry: RestyleEntry; 
             downloadName={`explodify_gen${generation}_${v}_${entry.jobId}.mp4`}
             baseKind="styled"
             saveTitle={`AI styled · gen ${generation} · ${v.toUpperCase()} axis`}
-            defaultLoop={defaultLoop}
+            onUpgradeClick={onUpgradeClick}
           />
         ))}
       </div>
@@ -257,12 +254,12 @@ export function VideoOutput({
   styleOptions,
   restyleStack,
   onRestyle,
-  loopMode,
 }: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [pricingOpen, setPricingOpen] = useState(false)
   const hasGenerating = restyleStack.some(e => e.status === 'generating')
   const totalGens = restyleStack.length + 1
-  const defaultLoop = loopMode === 'loop-preview'
+  const openPricing = () => setPricingOpen(true)
 
   function handleSubmit(opts: StyleOptions, variants: VariantName[]) {
     setDrawerOpen(false)
@@ -282,7 +279,7 @@ export function VideoOutput({
           key={entry.jobId}
           entry={entry}
           generation={totalGens - idx}
-          defaultLoop={defaultLoop}
+          onUpgradeClick={openPricing}
         />
       ))}
 
@@ -310,7 +307,7 @@ export function VideoOutput({
               downloadName={`explodify_${v}_${aiStyled ? 'styled' : 'base'}_${jobId}.mp4`}
               baseKind={aiStyled ? 'styled' : 'base'}
               saveTitle={`${aiStyled ? 'AI styled' : 'Base render'} · ${v.toUpperCase()} axis`}
-              defaultLoop={defaultLoop}
+              onUpgradeClick={openPricing}
               stageOverlay={idx === selectedVariants.length - 1 && !drawerOpen ? (
                 <RestyleOverlayBtn
                   disabled={hasGenerating}
@@ -334,6 +331,7 @@ export function VideoOutput({
         </div>
       )}
 
+      <PricingModal open={pricingOpen} onClose={() => setPricingOpen(false)} />
     </div>
   )
 }
