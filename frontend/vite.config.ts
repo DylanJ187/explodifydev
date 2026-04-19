@@ -1,6 +1,18 @@
 import { defineConfig } from 'vite'
+import type { IncomingMessage } from 'http'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+
+// Let SPA routes like /gallery be served by Vite when the browser is
+// asking for a page (Accept: text/html). API calls (fetch/XHR) keep flowing
+// to the backend because they don't include text/html in Accept.
+const htmlBypass = (req: IncomingMessage) => {
+  const accept = req.headers.accept ?? ''
+  if (req.method === 'GET' && accept.includes('text/html')) {
+    return '/index.html'
+  }
+  return null
+}
 
 export default defineConfig({
   plugins: [
@@ -14,13 +26,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/jobs': 'http://localhost:8000',
-      '/preview': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
-      '/gallery': 'http://localhost:8000',
-      '/stitch': 'http://localhost:8000',
+      '/jobs':    { target: 'http://localhost:8000', bypass: htmlBypass },
+      '/preview': { target: 'http://localhost:8000', bypass: htmlBypass },
+      '/health':  { target: 'http://localhost:8000', bypass: htmlBypass },
+      '/gallery': { target: 'http://localhost:8000', bypass: htmlBypass },
+      '/stitch':  { target: 'http://localhost:8000', bypass: htmlBypass },
     },
-    // /jobs covers /jobs/{id}/video, /jobs/{id}/base_video, /jobs/{id}/frames/*
-    // /jobs already covers /jobs/{id}/frames — no extra entry needed
   },
 })

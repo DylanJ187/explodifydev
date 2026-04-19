@@ -2,6 +2,7 @@
 import asyncio
 import os
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -13,6 +14,7 @@ from fastapi.responses import FileResponse, Response
 
 import backend.jobs as jobs
 from backend.gallery import GalleryStore
+from backend.profiles import ProfileStore, LOCAL_USER_ID
 from backend.media_utils import concat_videos, extract_thumbnail, probe_duration
 from backend.models import JobStatus
 
@@ -38,15 +40,57 @@ PREVIEW_DIR = Path(tempfile.gettempdir()) / "explodify_previews"
 GALLERY_DIR = Path(tempfile.gettempdir()) / "explodify_gallery"
 STITCH_DIR = GALLERY_DIR / "stitched"
 THUMB_DIR = GALLERY_DIR / "thumbnails"
+ACCOUNT_DIR = Path(tempfile.gettempdir()) / "explodify_accounts"
+AVATAR_DIR = ACCOUNT_DIR / "avatars"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
 GALLERY_DIR.mkdir(parents=True, exist_ok=True)
 STITCH_DIR.mkdir(parents=True, exist_ok=True)
 THUMB_DIR.mkdir(parents=True, exist_ok=True)
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 
 gallery_store = GalleryStore(GALLERY_DIR / "gallery.db")
+profile_store = ProfileStore(ACCOUNT_DIR / "profiles.db")
 
 VARIANT_NAMES = ("x", "y", "z")
+
+# Tier → saved-item cap. Tier is read from env for now; in future it will
+# come from the authenticated user record.
+TIER_CAPS: dict[str, int] = {"free": 20, "pro": 100, "studio": 250}
+
+
+def _current_tier() -> str:
+    return os.environ.get("EXPLODIFY_TIER", "free").lower()
+
+
+def _current_cap() -> int:
+    return TIER_CAPS.get(_current_tier(), TIER_CAPS["free"])
+
+
+def _job_output_path(job_id: str, variant: str, kind: str) -> Path | None:
+    """Resolve where a rendered video lives on disk for a given job/variant/kind.
+
+    Returns the preferred path for that kind, or None if kind is invalid.
+    The caller is responsible for checking existence.
+    """
+    base = UPLOAD_DIR / job_id
+    if kind == "base":
+        return base / f"base_video_{variant}.mp4"
+    if kind == "styled":
+        return base / f"final_video_{variant}.mp4"
+    if kind == "loop":
+        styled_loop = base / f"final_loop_video_{variant}.mp4"
+        unstyled_loop = base / f"loop_video_{variant}.mp4"
+        return styled_loop if styled_loop.exists() else unstyled_loop
+    return None
+
+
+def _default_title(kind: str, variant: str | None) -> str:
+    axis = variant.upper() if variant else ""
+    if kind == "base":    return f"Base render · {axis} axis"
+    if kind == "styled":  return f"AI styled · {axis} axis"
+    if kind == "loop":    return f"6s loop · {axis} axis"
+    return f"Clip · {axis}".strip(" ·")
 
 
 def _register_gallery_video(
@@ -456,6 +500,147 @@ def list_gallery(kind: Optional[str] = None, limit: int = 200):
     return {"items": items}
 
 
+@app.get("/gallery/stats")
+def gallery_stats():
+    return {
+        "count": gallery_store.count(),
+        "cap": _current_cap(),
+        "tier": _current_tier(),
+    }
+
+
+def _save_job_render(
+    *,
+    job_id: str,
+    variant: str,
+    kind: str,
+    title: Optional[str],
+    extra_metadata: Optional[dict] = None,
+) -> dict:
+    """Shared save logic used by POST /gallery and POST /gallery/replace.
+
+    Creates a gallery item that indexes a rendered video on disk. The video
+    file itself stays in the job directory — the gallery DB is an index, not
+    storage. Raises HTTPException on any failure.
+    """
+    if variant not in VARIANT_NAMES:
+        raise HTTPException(status_code=422, detail=f"Unknown variant: {variant}")
+    if kind not in {"base", "styled", "loop"}:
+        raise HTTPException(status_code=422, detail=f"Unsupported kind for save: {kind}")
+
+    video_path = _job_output_path(job_id, variant, kind)
+    if video_path is None or not video_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Render not found for job={job_id} variant={variant} kind={kind}",
+        )
+
+    display_title = (title or "").strip()[:120] or _default_title(kind, variant)
+
+    thumb_name = f"{uuid.uuid4().hex}.jpg"
+    thumb_out = THUMB_DIR / thumb_name
+    try:
+        thumb = extract_thumbnail(video_path, thumb_out)
+    except Exception:
+        thumb = None
+    try:
+        duration = probe_duration(video_path)
+    except Exception:
+        duration = None
+
+    metadata = {"saved_at": uuid.uuid4().hex[:8]}
+    if extra_metadata:
+        metadata.update(extra_metadata)
+
+    return gallery_store.add_item(
+        kind=kind,               # type: ignore[arg-type]
+        title=display_title,
+        video_path=video_path,
+        thumbnail_path=thumb,
+        duration_s=duration,
+        job_id=job_id,
+        variant=variant,
+        metadata=metadata,
+    )
+
+
+@app.post("/gallery", status_code=201)
+def save_to_gallery(
+    job_id: str = Form(...),
+    variant: str = Form(...),
+    kind: str = Form(...),
+    title: Optional[str] = Form(None),
+):
+    """Explicitly persist a rendered video into the gallery.
+
+    Returns 409 with {saved_count, cap, tier} when the user is at their tier cap.
+    The client should then prompt the user to replace, discard, or go back.
+    """
+    cap = _current_cap()
+    count = gallery_store.count()
+    if count >= cap:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "gallery_full",
+                "saved_count": count,
+                "cap": cap,
+                "tier": _current_tier(),
+            },
+        )
+    return _save_job_render(job_id=job_id, variant=variant, kind=kind, title=title)
+
+
+@app.post("/gallery/replace", status_code=200)
+def replace_gallery_item(
+    replace_id: str = Form(...),
+    job_id: str = Form(...),
+    variant: str = Form(...),
+    kind: str = Form(...),
+    title: Optional[str] = Form(None),
+):
+    """Atomically swap one saved item for a new one when at cap.
+
+    Deletes the target item (and its stitched file if any), then saves the
+    new render. Not truly atomic at the filesystem layer, but the DB is
+    consistent: delete-then-insert within one request.
+    """
+    victim = gallery_store.get_item(replace_id)
+    if victim is None:
+        raise HTTPException(status_code=404, detail="Replacement target not found")
+
+    new_item = _save_job_render(
+        job_id=job_id, variant=variant, kind=kind, title=title,
+        extra_metadata={"replaced_id": replace_id},
+    )
+
+    gallery_store.delete_item(replace_id)
+    if victim["kind"] == "stitched":
+        try:
+            Path(victim["video_path"]).unlink(missing_ok=True)
+            if victim.get("thumbnail_path"):
+                Path(victim["thumbnail_path"]).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return new_item
+
+
+@app.post("/gallery/{item_id}/favorite")
+def set_favorite(item_id: str, favorite: bool = Form(...)):
+    item = gallery_store.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    next_meta = dict(item.get("metadata") or {})
+    next_meta["favorite"] = bool(favorite)
+    with gallery_store._connect() as conn:  # noqa: SLF001 — tight coupling ok here
+        import json as _json
+        conn.execute(
+            "UPDATE gallery_items SET metadata_json = ? WHERE id = ?",
+            (_json.dumps(next_meta), item_id),
+        )
+    return {"ok": True, "favorite": next_meta["favorite"]}
+
+
 @app.get("/gallery/{item_id}")
 def get_gallery_item(item_id: str):
     item = gallery_store.get_item(item_id)
@@ -514,6 +699,87 @@ def delete_gallery_item(item_id: str):
     return {"ok": True}
 
 
+# ─────────────────────────────── Account / Profile ───────────────────────────
+
+
+@app.get("/account/me")
+def get_account():
+    """Return the current user's profile (seeds defaults on first call)."""
+    return profile_store.get(LOCAL_USER_ID)
+
+
+@app.post("/account")
+async def update_account(
+    full_name:       Optional[str] = Form(None),
+    username:        Optional[str] = Form(None),
+    email:           Optional[str] = Form(None),
+    phone:           Optional[str] = Form(None),
+    work_type:       Optional[str] = Form(None),
+    axis_preference: Optional[str] = Form(None),
+    render_prefs:    Optional[str] = Form(None),
+    preferences:     Optional[str] = Form(None),
+    avatar:          Optional[UploadFile] = File(None),
+):
+    """Update profile fields. All fields optional; only supplied ones change.
+
+    `preferences` is a JSON string (merged deep into the stored preferences).
+    `avatar` is an optional image upload; overwrites the previous avatar.
+    """
+    import json as _json
+
+    avatar_path: Optional[str] = None
+    if avatar is not None and avatar.filename:
+        suffix = Path(avatar.filename).suffix.lower() or ".png"
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
+            raise HTTPException(status_code=400, detail="unsupported_image_format")
+        dest = AVATAR_DIR / f"{LOCAL_USER_ID}{suffix}"
+        # Remove any previously stored avatar with a different suffix.
+        for existing in AVATAR_DIR.glob(f"{LOCAL_USER_ID}.*"):
+            if existing != dest:
+                existing.unlink(missing_ok=True)
+        data = await avatar.read()
+        dest.write_bytes(data)
+        avatar_path = str(dest)
+
+    prefs_dict: Optional[dict] = None
+    if preferences is not None:
+        try:
+            prefs_dict = _json.loads(preferences)
+            if not isinstance(prefs_dict, dict):
+                raise ValueError("preferences must be an object")
+        except (ValueError, _json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail=f"invalid_preferences: {exc}")
+
+    return profile_store.update(
+        LOCAL_USER_ID,
+        full_name=full_name,
+        username=username,
+        email=email,
+        phone=phone,
+        avatar_path=avatar_path,
+        work_type=work_type,
+        axis_preference=axis_preference,
+        render_prefs=render_prefs,
+        preferences=prefs_dict,
+    )
+
+
+@app.get("/account/avatar")
+def get_account_avatar():
+    """Serve the current user's avatar file, if any."""
+    profile = profile_store.get(LOCAL_USER_ID)
+    path = profile.get("avatar_path")
+    if not path or not Path(path).exists():
+        raise HTTPException(status_code=404, detail="no_avatar")
+    return FileResponse(path)
+
+
+@app.post("/account/signout-all")
+def signout_all_sessions():
+    """Stub — real session revocation lands with auth."""
+    return {"ok": True, "revoked": 0}
+
+
 @app.post("/stitch", status_code=201)
 def stitch_gallery_items(
     item_ids: str = Form(...),
@@ -531,6 +797,19 @@ def stitch_gallery_items(
         raise HTTPException(status_code=422, detail="item_ids must be a JSON array")
     if not isinstance(ordered_ids, list) or len(ordered_ids) < 2:
         raise HTTPException(status_code=422, detail="Provide at least 2 item ids to stitch")
+
+    cap = _current_cap()
+    count = gallery_store.count()
+    if count >= cap:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "gallery_full",
+                "saved_count": count,
+                "cap": cap,
+                "tier": _current_tier(),
+            },
+        )
 
     source_paths: list[Path] = []
     source_titles: list[str] = []
@@ -557,7 +836,11 @@ def stitch_gallery_items(
         video_path=out_path,
         kind="stitched",
         title=default_title,
-        metadata={"source_ids": ordered_ids, "source_titles": source_titles},
+        metadata={
+            "source_ids": ordered_ids,
+            "source_titles": source_titles,
+            "saved_at": time.time(),
+        },
     )
     if item is None:
         raise HTTPException(status_code=500, detail="Failed to register stitched item")
@@ -777,24 +1060,8 @@ async def _run_pipeline(
         await asyncio.gather(*loop_tasks)
         jobs.update_phase(job_id, 3, "done")
 
-        # Auto-save unstyled renders + loops to gallery (non-fatal if it fails).
-        for v in _variants:
-            base_path = output_dir / f"base_video_{v}.mp4"
-            loop_path = output_dir / f"loop_video_{v}.mp4"
-            if base_path.exists():
-                _register_gallery_video(
-                    video_path=base_path, kind="base",
-                    title=f"Base render · {v.upper()} axis",
-                    job_id=job_id, variant=v,
-                    metadata={"explode_scalar": scalar, "style": "unstyled"},
-                )
-            if loop_path.exists():
-                _register_gallery_video(
-                    video_path=loop_path, kind="loop",
-                    title=f"6s loop · {v.upper()} axis",
-                    job_id=job_id, variant=v,
-                    metadata={"source": "base", "style": "unstyled"},
-                )
+        # Renders are served from the job directory; the client must
+        # explicitly call POST /gallery to persist a video into the gallery.
 
         # -- Phase 4: Kling styling -----------------------------------------------
         # When auto_approve is True (single-variant new flow), skip the approval
@@ -858,24 +1125,8 @@ async def _run_pipeline(
         if styled_loop_tasks:
             await asyncio.gather(*styled_loop_tasks, return_exceptions=True)
 
-        for variant in selected:
-            styled_path = output_dir / f"final_video_{variant}.mp4"
-            styled_loop_path = output_dir / f"final_loop_video_{variant}.mp4"
-            if styled_path.exists():
-                _register_gallery_video(
-                    video_path=styled_path, kind="styled",
-                    title=f"AI styled · {variant.upper()} axis",
-                    job_id=job_id, variant=variant,
-                    metadata={"style_prompt": style_prompt, "style": "styled"},
-                )
-            if styled_loop_path.exists():
-                _register_gallery_video(
-                    video_path=styled_loop_path, kind="loop",
-                    title=f"6s styled loop · {variant.upper()} axis",
-                    job_id=job_id, variant=variant,
-                    metadata={"source": "styled", "style": "styled"},
-                )
-
+        # Styled renders + loops stay on disk under jobs/{id}/ until the
+        # client saves them via POST /gallery.
         jobs.update_phase(job_id, 4, "done")
         jobs.mark_done(job_id, ai_styled=len(style_tasks) > 0)
 

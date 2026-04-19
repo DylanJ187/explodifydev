@@ -1,6 +1,6 @@
 // frontend/src/App.tsx
 import { useState, useEffect, useRef } from 'react'
-import { Routes, Route, useLocation, useNavigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { UploadZone } from './components/UploadZone'
 import { StylePanel } from './components/StylePanel'
 import { EasingEditor, ORBIT_EASING_PRESETS, CINEMATIC_EXPLOSION_SAMPLES, CINEMATIC_ORBIT_SAMPLES } from './components/EasingEditor'
@@ -10,9 +10,13 @@ import type { MeshViewerHandle } from './components/MeshViewer'
 import { IdleOutput } from './components/IdleOutput'
 import { LoadingOutput } from './components/LoadingOutput'
 import { VideoOutput } from './components/VideoOutput'
+import { CustomVideoPlayer } from './components/CustomVideoPlayer'
+import { SaveToGalleryButton } from './components/SaveToGalleryButton'
 import { LoopModeSelector } from './components/LoopModeSelector'
 import { TopNav } from './components/TopNav'
 import type { NavTab } from './components/TopNav'
+import CreditsBlocks from './components/shell/CreditsBlocks'
+import CubeLogo from './components/shell/CubeLogo'
 import { Gallery } from './components/Gallery'
 import { Profile } from './components/Profile'
 import { JobQueueProvider, useJobQueue } from './contexts/JobQueueContext'
@@ -24,7 +28,7 @@ import RootRedirect from './routes/RootRedirect'
 import { useActiveTab, pathForTab } from './routes/useActiveTab'
 import LoginPage from './pages/LoginPage'
 import AuthCallback from './pages/AuthCallback'
-import DashboardPage from './pages/DashboardPage'
+import LandingPage from './pages/LandingPage'
 
 type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'awaiting_approval' | 'styling' | 'done' | 'error'
 
@@ -62,13 +66,15 @@ export default function App() {
     <JobQueueProvider>
       <Routes>
         <Route path="/" element={<RootRedirect />} />
+        <Route path="/landing" element={<LandingPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/auth/callback" element={<AuthCallback />} />
         <Route element={<RequireAuth />}>
-          <Route path="/dashboard" element={<AppInner />} />
-          <Route path="/studio" element={<AppInner />} />
           <Route path="/gallery" element={<AppInner />} />
+          <Route path="/studio" element={<AppInner />} />
           <Route path="/profile" element={<AppInner />} />
+          <Route path="/dashboard" element={<Navigate to="/gallery" replace />} />
+          <Route path="/projects" element={<Navigate to="/gallery" replace />} />
         </Route>
       </Routes>
       <JobQueueIndicator />
@@ -304,41 +310,39 @@ function AppInner() {
       <span className="app-topbar-edge app-topbar-edge--r" aria-hidden />
 
       <div className="app-topbar-brand">
-        <span className="wordmark">EXPLOD<em>I</em>FY</span>
+        <button
+          type="button"
+          className="wordmark wordmark--button"
+          onClick={() => navigate(pathForTab('gallery'))}
+          aria-label="Go to gallery"
+        >
+          <CubeLogo size={30} className="wordmark__cube" />
+          <span className="wordmark__text">EXPLOD<em>I</em>FY</span>
+        </button>
       </div>
 
       <div className="app-topbar-nav">
         <TopNav
           tab={tab}
           onChange={(next) => navigate(pathForTab(next))}
-          creditsRemaining={30}
-          creditsTotal={30}
-          onCreditClick={() => navigate(pathForTab('profile'))}
         />
       </div>
 
-      <div className="app-topbar-meta" />
+      <div className="app-topbar-meta">
+        <CreditsBlocks
+          remaining={30}
+          total={30}
+          onClick={() => navigate(pathForTab('profile'))}
+        />
+      </div>
     </header>
   )
-
-  if (tab === 'home') {
-    return (
-      <div className="app-shell">
-        {topbar}
-        <DashboardPage />
-      </div>
-    )
-  }
 
   if (tab === 'gallery') {
     return (
       <div className="app-shell">
         {topbar}
-        <div className="app-layout app-layout--single">
-          <main className="right-panel right-panel--gallery">
-            <Gallery />
-          </main>
-        </div>
+        <Gallery />
       </div>
     )
   }
@@ -531,6 +535,7 @@ function AppInner() {
           <DualApprovalGate
             jobId={jobId}
             selectedVariant={selectedVariant}
+            loopMode={loopMode}
             onApprove={handleApprove}
             onAdjust={() => setState('orientation')}
             onSkip={reset}
@@ -549,6 +554,7 @@ function AppInner() {
             styleOptions={styleOptions}
             restyleStack={restyleStack}
             onRestyle={handleRestyle}
+            loopMode={loopMode}
           />
         )}
 
@@ -568,16 +574,26 @@ function AppInner() {
 function DualApprovalGate({
   jobId,
   selectedVariant,
+  loopMode,
   onApprove,
   onAdjust,
   onSkip,
 }: {
   jobId: string
   selectedVariant: VariantName
+  loopMode: LoopMode
   onApprove: (variants: VariantName[]) => void
   onAdjust: () => void
   onSkip: () => void
 }) {
+  const isLoop = loopMode === 'loop-preview'
+  const videoUrl = isLoop
+    ? `/jobs/${jobId}/loop_video/${selectedVariant}`
+    : `/jobs/${jobId}/base_video/${selectedVariant}`
+  const downloadName = `explodify_${selectedVariant}_${isLoop ? 'loop' : 'base'}_${jobId}.mp4`
+  const durationLabel = isLoop ? '6S SEAMLESS LOOP' : '3S @ 24FPS'
+  const frameLabel = isLoop ? '144 FRAMES' : '72 FRAMES'
+
   return (
     <div className="review-gate animate-fade-in">
       <div className="review-header">
@@ -586,24 +602,24 @@ function DualApprovalGate({
           <span className="review-phase">EXPLOSION RENDER</span>
         </div>
         <div className="review-header-right">
-          <span className="review-meta-item">72 FRAMES</span>
+          <span className="review-meta-item">{frameLabel}</span>
           <span className="review-meta-sep">·</span>
-          <span className="review-meta-item">3S @ 24FPS</span>
+          <span className="review-meta-item">{durationLabel}</span>
           <span className="review-meta-sep">·</span>
           <span className="review-meta-item review-meta-unstyled">UNSTYLED RENDER</span>
         </div>
       </div>
 
       <div className="review-single-video">
-        <video
-          src={`/jobs/${jobId}/base_video/${selectedVariant}`}
-          controls
-          autoPlay
-          loop
-          muted
-          playsInline
-          className="review-video-full"
-        />
+        <div className="review-video-stage-wrap">
+          <CustomVideoPlayer
+            src={videoUrl}
+            downloadName={downloadName}
+            canDownload={false}
+            autoPlay
+            loop
+          />
+        </div>
       </div>
 
       <div className="review-actions">
@@ -615,6 +631,12 @@ function DualApprovalGate({
             <span className="review-proceed-label">Style This Video</span>
             <span className="review-proceed-arrow">→</span>
           </button>
+          <SaveToGalleryButton
+            jobId={jobId}
+            variant={selectedVariant}
+            kind="base"
+            title={`Unstyled · ${selectedVariant.toUpperCase()} axis`}
+          />
           <button className="review-redo-btn review-adjust-btn" onClick={onAdjust}>
             ← Adjust Explosion
           </button>

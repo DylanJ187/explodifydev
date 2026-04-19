@@ -117,6 +117,13 @@ class GalleryStore:
             ).fetchone()
         return _row_to_dict(row) if row else None
 
+    def count(self) -> int:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS n FROM gallery_items"
+            ).fetchone()
+        return int(row["n"]) if row else 0
+
     def list_items(
         self, kind: Optional[GalleryKind] = None, limit: int = 200,
     ) -> list[dict]:

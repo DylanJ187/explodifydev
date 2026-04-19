@@ -1,31 +1,72 @@
 // frontend/src/components/Gallery.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   listGallery, deleteGalleryItem, renameGalleryItem,
   stitchGalleryItems, galleryVideoUrl, galleryThumbnailUrl,
+  toggleFavorite,
 } from '../api/client'
 import type { GalleryItem, GalleryKind } from '../api/client'
 import { CustomVideoPlayer } from './CustomVideoPlayer'
+import { ConfirmModal, PromptModal } from './shell/Modal'
 
-type FilterKind = 'all' | GalleryKind
+type FilterKey = 'all' | 'recent' | 'favorites' | GalleryKind
 
-const FILTERS: { value: FilterKind; label: string }[] = [
-  { value: 'all',       label: 'All' },
-  { value: 'base',      label: 'Unstyled' },
-  { value: 'styled',    label: 'Styled' },
-  { value: 'loop',      label: '6s Loops' },
-  { value: 'stitched',  label: 'Stitched' },
+interface FilterDef {
+  key: FilterKey
+  label: string
+  section: 'library' | 'type'
+}
+
+const FILTERS: FilterDef[] = [
+  { key: 'all',       label: 'All',          section: 'library' },
+  { key: 'recent',    label: 'Recent',       section: 'library' },
+  { key: 'favorites', label: 'Favorites',    section: 'library' },
+  { key: 'base',      label: 'Unstyled',     section: 'type' },
+  { key: 'styled',    label: 'Styled',       section: 'type' },
+  { key: 'loop',      label: '6s Loops',     section: 'type' },
+  { key: 'stitched',  label: 'Stitched',     section: 'type' },
 ]
 
+const KIND_LABEL: Record<GalleryKind, string> = {
+  base: 'UNSTYLED',
+  styled: 'STYLED',
+  loop: '6S LOOP',
+  stitched: 'STITCHED',
+}
+
+const RECENT_WINDOW_S = 7 * 24 * 60 * 60 // 7 days
+
+function isFavorite(it: GalleryItem) {
+  return it.metadata?.favorite === true
+}
+
+function isRecent(it: GalleryItem, now: number) {
+  return it.created_at >= now - RECENT_WINDOW_S
+}
+
+function formatShortDate(unixSec: number) {
+  const d = new Date(unixSec * 1000)
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${mm}.${dd}`
+}
+
 export function Gallery() {
+  const navigate = useNavigate()
   const [items, setItems] = useState<GalleryItem[]>([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState<FilterKind>('all')
+  const [filter, setFilter] = useState<FilterKey>('all')
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [error, setError] = useState<string | null>(null)
   const [previewItem, setPreviewItem] = useState<GalleryItem | null>(null)
   const [selection, setSelection] = useState<string[]>([])
   const [stitchTitle, setStitchTitle] = useState('')
   const [stitching, setStitching] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<GalleryItem | null>(null)
+  const [renameTarget, setRenameTarget] = useState<GalleryItem | null>(null)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -42,10 +83,64 @@ export function Gallery() {
 
   useEffect(() => { refresh() }, [refresh])
 
+  const now = useMemo(() => Math.floor(Date.now() / 1000), [])
+
+  const counts: Record<FilterKey, number> = useMemo(() => ({
+    all:       items.length,
+    recent:    items.filter(it => isRecent(it, now)).length,
+    favorites: items.filter(isFavorite).length,
+    base:      items.filter(it => it.kind === 'base').length,
+    styled:    items.filter(it => it.kind === 'styled').length,
+    loop:      items.filter(it => it.kind === 'loop').length,
+    stitched:  items.filter(it => it.kind === 'stitched').length,
+  }), [items, now])
+
   const filtered = useMemo(() => {
-    if (filter === 'all') return items
-    return items.filter(it => it.kind === filter)
-  }, [items, filter])
+    const sorted = [...items].sort((a, b) => b.created_at - a.created_at)
+    switch (filter) {
+      case 'all':       return sorted
+      case 'recent':    return sorted.filter(it => isRecent(it, now))
+      case 'favorites': return sorted.filter(isFavorite)
+      default:          return sorted.filter(it => it.kind === filter)
+    }
+  }, [items, filter, now])
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tgt = e.target as HTMLElement | null
+      const inField =
+        tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)
+
+      if (e.key === 'Escape') {
+        if (previewItem) { setPreviewItem(null); return }
+        if (renameTarget) { setRenameTarget(null); return }
+        if (deleteTarget) { setDeleteTarget(null); return }
+        if (bulkDeleteOpen) { setBulkDeleteOpen(false); return }
+        if (selection.length > 0) { setSelection([]); return }
+      }
+
+      if (inField) return
+
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selection.length > 0 && !previewItem) {
+        e.preventDefault()
+        setBulkDeleteOpen(true)
+        return
+      }
+
+      if (e.key === 'a' && (e.metaKey || e.ctrlKey) && !previewItem) {
+        e.preventDefault()
+        setSelection(filtered.map(it => it.id))
+        return
+      }
+
+      if (e.key === 'g' && !previewItem) { setViewMode('grid'); return }
+      if (e.key === 'l' && !previewItem) { setViewMode('list'); return }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [previewItem, renameTarget, deleteTarget, bulkDeleteOpen, selection.length, filtered])
+
+  const activeFilter = FILTERS.find(f => f.key === filter) ?? FILTERS[0]
 
   const selectedItems = useMemo(
     () => selection.map(id => items.find(it => it.id === id)).filter((v): v is GalleryItem => !!v),
@@ -85,8 +180,26 @@ export function Gallery() {
     }
   }
 
-  async function handleDelete(item: GalleryItem) {
-    if (!confirm(`Delete "${item.title}"?`)) return
+  async function confirmBulkDelete() {
+    if (selection.length === 0) return
+    setBulkDeleting(true)
+    const ids = [...selection]
+    try {
+      await Promise.all(ids.map(id => deleteGalleryItem(id)))
+      setSelection([])
+      setBulkDeleteOpen(false)
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Bulk delete failed')
+    } finally {
+      setBulkDeleting(false)
+    }
+  }
+
+  async function confirmDelete() {
+    const item = deleteTarget
+    if (!item) return
+    setDeleteTarget(null)
     try {
       await deleteGalleryItem(item.id)
       setSelection(prev => prev.filter(id => id !== item.id))
@@ -96,10 +209,28 @@ export function Gallery() {
     }
   }
 
-  async function handleRename(item: GalleryItem) {
-    const next = prompt('Rename video:', item.title)
-    if (next === null) return
+  async function handleToggleFavorite(item: GalleryItem) {
+    const nextFav = !isFavorite(item)
+    // Optimistic update
+    setItems(prev => prev.map(it => it.id === item.id
+      ? { ...it, metadata: { ...it.metadata, favorite: nextFav } }
+      : it))
+    try {
+      await toggleFavorite(item.id, nextFav)
+    } catch (e) {
+      // Revert on failure
+      setItems(prev => prev.map(it => it.id === item.id
+        ? { ...it, metadata: { ...it.metadata, favorite: !nextFav } }
+        : it))
+      setError(e instanceof Error ? e.message : 'Favorite failed')
+    }
+  }
+
+  async function submitRename(next: string) {
+    const item = renameTarget
+    if (!item) return
     const clean = next.trim()
+    setRenameTarget(null)
     if (!clean || clean === item.title) return
     try {
       await renameGalleryItem(item.id, clean)
@@ -109,55 +240,105 @@ export function Gallery() {
     }
   }
 
+  const librarySection = FILTERS.filter(f => f.section === 'library')
+  const typeSection    = FILTERS.filter(f => f.section === 'type')
+
+  const isEmptyLibrary = !loading && items.length === 0
+
   return (
     <div className="gallery-root">
 
-      <div className="gallery-header">
-        <div className="gallery-header-left">
-          <h2 className="gallery-title">Gallery</h2>
-          <span className="gallery-count">{items.length} videos</span>
+      {/* Sidebar */}
+      <aside className="gallery-sidebar" aria-label="Gallery filters">
+        <div className="gallery-sidebar-section">
+          <div className="gallery-sidebar-heading">Library</div>
+          <ul className="gallery-sidebar-list">
+            {librarySection.map(f => (
+              <SidebarItem
+                key={f.key}
+                label={f.label}
+                count={counts[f.key]}
+                active={filter === f.key}
+                onClick={() => setFilter(f.key)}
+              />
+            ))}
+          </ul>
         </div>
-        <div className="gallery-filters">
-          {FILTERS.map(f => (
+
+        <div className="gallery-sidebar-section">
+          <div className="gallery-sidebar-heading">By Type</div>
+          <ul className="gallery-sidebar-list">
+            {typeSection.map(f => (
+              <SidebarItem
+                key={f.key}
+                label={f.label}
+                count={counts[f.key]}
+                active={filter === f.key}
+                onClick={() => setFilter(f.key)}
+              />
+            ))}
+          </ul>
+        </div>
+      </aside>
+
+      {/* Main */}
+      <section className="gallery-main">
+        <header className="gallery-main-header">
+          <div className="gallery-main-headings">
+            <h1 className="gallery-main-title">{activeFilter.label.toUpperCase()}</h1>
+            <div className="gallery-main-sub">
+              {loading
+                ? 'Loading…'
+                : `${filtered.length} ${filtered.length === 1 ? 'clip' : 'clips'} · sorted newest first`}
+            </div>
+          </div>
+          <div className="gallery-view-toggle" role="group" aria-label="View mode">
             <button
-              key={f.value}
-              className={`gallery-filter ${filter === f.value ? 'gallery-filter--active' : ''}`}
-              onClick={() => setFilter(f.value)}
+              type="button"
+              className={`gallery-view-btn ${viewMode === 'grid' ? 'gallery-view-btn--active' : ''}`}
+              onClick={() => setViewMode('grid')}
+              aria-pressed={viewMode === 'grid'}
             >
-              {f.label}
+              Grid
             </button>
-          ))}
-        </div>
-      </div>
+            <button
+              type="button"
+              className={`gallery-view-btn ${viewMode === 'list' ? 'gallery-view-btn--active' : ''}`}
+              onClick={() => setViewMode('list')}
+              aria-pressed={viewMode === 'list'}
+            >
+              List
+            </button>
+          </div>
+        </header>
 
-      {error && <div className="gallery-error">{error}</div>}
+        {error && <div className="gallery-error">{error}</div>}
 
-      {loading && items.length === 0 && (
-        <div className="gallery-empty">Loading…</div>
-      )}
-
-      {!loading && filtered.length === 0 && (
-        <div className="gallery-empty">
-          {items.length === 0
-            ? 'No videos saved yet. Generate a render to see it here.'
-            : 'No videos match this filter.'}
-        </div>
-      )}
-
-      <div className="gallery-grid">
-        {filtered.map(item => (
-          <GalleryCard
-            key={item.id}
-            item={item}
-            selected={selection.includes(item.id)}
-            selectionIndex={selection.indexOf(item.id)}
-            onToggleSelect={() => toggleSelect(item.id)}
-            onPreview={() => setPreviewItem(item)}
-            onDelete={() => handleDelete(item)}
-            onRename={() => handleRename(item)}
-          />
-        ))}
-      </div>
+        {isEmptyLibrary ? (
+          <EmptyState onStart={() => navigate('/studio')} />
+        ) : !loading && filtered.length === 0 ? (
+          <div className="gallery-empty-small">
+            No clips in <strong>{activeFilter.label}</strong> yet.
+          </div>
+        ) : (
+          <div className={viewMode === 'grid' ? 'gallery-grid' : 'gallery-list'}>
+            {filtered.map(item => (
+              <ProjectCard
+                key={item.id}
+                item={item}
+                mode={viewMode}
+                selected={selection.includes(item.id)}
+                selectionIndex={selection.indexOf(item.id)}
+                onToggleSelect={() => toggleSelect(item.id)}
+                onPreview={() => setPreviewItem(item)}
+                onDelete={() => setDeleteTarget(item)}
+                onRename={() => setRenameTarget(item)}
+                onToggleFavorite={() => handleToggleFavorite(item)}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
       {selection.length > 0 && (
         <StitchBar
@@ -169,6 +350,8 @@ export function Gallery() {
           onClear={() => setSelection([])}
           onStitch={handleStitch}
           stitching={stitching}
+          onBulkDelete={() => setBulkDeleteOpen(true)}
+          bulkDeleting={bulkDeleting}
         />
       )}
 
@@ -176,72 +359,308 @@ export function Gallery() {
         <PreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />
       )}
 
+      <ConfirmModal
+        open={bulkDeleteOpen}
+        title={`Delete ${selection.length} ${selection.length === 1 ? 'video' : 'videos'}`}
+        destructive
+        confirmLabel={bulkDeleting ? 'Deleting…' : `Delete ${selection.length}`}
+        message={
+          <>Permanently remove <strong>{selection.length}</strong> {selection.length === 1 ? 'clip' : 'clips'} from your gallery? This frees up {selection.length} {selection.length === 1 ? 'slot' : 'slots'}.</>
+        }
+        onConfirm={confirmBulkDelete}
+        onCancel={() => setBulkDeleteOpen(false)}
+      />
+
+      <ConfirmModal
+        open={deleteTarget !== null}
+        title="Delete video"
+        destructive
+        confirmLabel="Delete"
+        message={
+          deleteTarget
+            ? <>Remove <strong>{deleteTarget.title}</strong> from your gallery? This frees up one slot.</>
+            : null
+        }
+        onConfirm={confirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      <PromptModal
+        open={renameTarget !== null}
+        title="Rename video"
+        label="Title"
+        initialValue={renameTarget?.title ?? ''}
+        placeholder="e.g. Gearbox · exploded · v2"
+        confirmLabel="Rename"
+        onSubmit={submitRename}
+        onCancel={() => setRenameTarget(null)}
+      />
+
+    </div>
+  )
+}
+
+// ─── Sidebar item ───────────────────────────────────────────────────────────
+
+function SidebarItem({
+  label, count, active, onClick,
+}: {
+  label: string
+  count: number
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <li>
+      <button
+        type="button"
+        className={`gallery-sidebar-item ${active ? 'gallery-sidebar-item--active' : ''}`}
+        onClick={onClick}
+        aria-current={active ? 'page' : undefined}
+      >
+        <span className="gallery-sidebar-item-label">{label}</span>
+        <span className="gallery-sidebar-item-count">{String(count).padStart(2, '0')}</span>
+      </button>
+    </li>
+  )
+}
+
+// ─── Empty state ────────────────────────────────────────────────────────────
+
+const EMPTY_QUIPS = [
+  'This place is a bit empty — like a physicist\'s fridge.',
+  'Nothing to see here. Your GPU is on a coffee break.',
+  'The void stares back. Let\'s fill it with something glorious.',
+  'No clips yet. The render queue is suspiciously peaceful.',
+]
+
+function EmptyState({ onStart }: { onStart: () => void }) {
+  const quip = useMemo(() => EMPTY_QUIPS[Math.floor(Math.random() * EMPTY_QUIPS.length)], [])
+  return (
+    <div className="gallery-empty">
+      <svg
+        className="gallery-empty-icon"
+        viewBox="0 0 32 32"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.3}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M16 7 L24.5 11.5 L24.5 20.5 L16 25 L7.5 20.5 L7.5 11.5 Z" />
+        <path d="M16 16 L16 25 M7.5 11.5 L16 16 M24.5 11.5 L16 16" />
+      </svg>
+      <div className="gallery-empty-headline">Nothing saved yet</div>
+      <div className="gallery-empty-quip">{quip}</div>
+      <button type="button" className="gallery-empty-cta" onClick={onStart}>
+        Start creating →
+      </button>
     </div>
   )
 }
 
 // ─── Card ───────────────────────────────────────────────────────────────────
 
-function GalleryCard({
-  item, selected, selectionIndex, onToggleSelect, onPreview, onDelete, onRename,
+function ProjectCard({
+  item, mode, selected, selectionIndex,
+  onToggleSelect, onPreview, onDelete, onRename, onToggleFavorite,
 }: {
   item: GalleryItem
+  mode: 'grid' | 'list'
   selected: boolean
   selectionIndex: number
   onToggleSelect: () => void
   onPreview: () => void
   onDelete: () => void
   onRename: () => void
+  onToggleFavorite: () => void
 }) {
-  const kindLabel: Record<GalleryKind, string> = {
-    base: 'UNSTYLED',
-    styled: 'STYLED',
-    loop: '6S LOOP',
-    stitched: 'STITCHED',
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [hovering, setHovering] = useState(false)
+  const favorite = isFavorite(item)
+  const cls = `project-card project-card--${mode}
+    ${selected ? 'project-card--selected' : ''}
+    ${hovering ? 'project-card--hovering' : ''}`
+
+  function onEnter() {
+    setHovering(true)
+    const v = videoRef.current
+    if (v) {
+      v.currentTime = 0
+      v.play().catch(() => { /* autoplay block */ })
+    }
   }
+  function onLeave() {
+    setHovering(false)
+    const v = videoRef.current
+    if (v) {
+      v.pause()
+      v.currentTime = 0
+    }
+  }
+
   return (
     <div
-      className={`gallery-card ${selected ? 'gallery-card--selected' : ''}`}
+      className={cls}
+      onMouseEnter={onEnter}
+      onMouseLeave={onLeave}
     >
       <button
-        className="gallery-card-thumb"
+        className="project-card-thumb"
         onClick={onPreview}
         aria-label={`Preview ${item.title}`}
       >
         {item.thumbnail_path
           ? <img src={galleryThumbnailUrl(item.id)} alt="" loading="lazy" />
-          : <div className="gallery-thumb-empty" />}
-        <span className={`gallery-card-kind gallery-card-kind--${item.kind}`}>
-          {kindLabel[item.kind]}
+          : <div className="project-card-thumb-empty" />}
+        <video
+          ref={videoRef}
+          className="project-card-hover-video"
+          src={galleryVideoUrl(item.id)}
+          muted
+          loop
+          playsInline
+          preload="none"
+          aria-hidden
+        />
+        <span className={`project-card-kind project-card-kind--${item.kind}`}>
+          {KIND_LABEL[item.kind]}
         </span>
-        {selected && (
-          <span className="gallery-card-selmark">{selectionIndex + 1}</span>
-        )}
-      </button>
-      <div className="gallery-card-meta">
-        <div className="gallery-card-title" title={item.title}>{item.title}</div>
         {item.duration_s != null && (
-          <div className="gallery-card-duration">{item.duration_s.toFixed(1)}s</div>
+          <span className="project-card-duration">{item.duration_s.toFixed(1)}s</span>
         )}
-      </div>
-      <div className="gallery-card-actions">
+        {selected && (
+          <span className="project-card-selmark">{selectionIndex + 1}</span>
+        )}
         <button
-          className={`gallery-card-btn ${selected ? 'gallery-card-btn--active' : ''}`}
+          type="button"
+          className={`project-card-fav ${favorite ? 'project-card-fav--on' : ''}`}
+          onClick={e => { e.stopPropagation(); onToggleFavorite() }}
+          aria-label={favorite ? 'Unfavorite' : 'Favorite'}
+          aria-pressed={favorite}
+        >
+          <IconStar filled={favorite} />
+        </button>
+      </button>
+
+      <div className="project-card-meta">
+        <div className="project-card-title" title={item.title}>{item.title}</div>
+        <div className="project-card-date">{formatShortDate(item.created_at)}</div>
+      </div>
+
+      <div className="project-card-actions">
+        <button
+          className={`project-card-btn project-card-btn--stitch ${selected ? 'project-card-btn--active' : ''}`}
           onClick={onToggleSelect}
         >
-          {selected ? '✓ Stitch' : '+ Stitch'}
+          <IconStitch />
+          <span>{selected ? 'Stitching' : 'Stitch'}</span>
         </button>
-        <a
-          className="gallery-card-btn"
-          href={galleryVideoUrl(item.id)}
-          download={`${item.title.replace(/\s+/g, '_')}.mp4`}
-        >
-          ↓
-        </a>
-        <button className="gallery-card-btn" onClick={onRename}>✎</button>
-        <button className="gallery-card-btn gallery-card-btn--danger" onClick={onDelete}>×</button>
+        <div className="project-card-icon-group">
+          <a
+            className="project-card-icon-btn"
+            href={galleryVideoUrl(item.id)}
+            download={`${item.title.replace(/\s+/g, '_')}.mp4`}
+            aria-label="Download"
+            title="Download"
+            onClick={e => e.stopPropagation()}
+          >
+            <IconDownload />
+          </a>
+          <button
+            type="button"
+            className="project-card-icon-btn"
+            onClick={onRename}
+            aria-label="Rename"
+            title="Rename"
+          >
+            <IconPencil />
+          </button>
+          <button
+            type="button"
+            className="project-card-icon-btn project-card-icon-btn--danger"
+            onClick={onDelete}
+            aria-label="Delete"
+            title="Delete"
+          >
+            <IconTrash />
+          </button>
+        </div>
       </div>
     </div>
+  )
+}
+
+// ─── Icons ──────────────────────────────────────────────────────────────────
+
+function IconStar({ filled }: { filled: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden>
+      <path
+        d="M8 1.6l1.95 4.1 4.5.5-3.35 3.1.96 4.45L8 11.55 3.94 13.75l.96-4.45L1.55 6.2l4.5-.5L8 1.6z"
+        fill={filled ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function IconPencil() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M2.5 13.5l.8-3 7.5-7.5a1.4 1.4 0 012 2l-7.5 7.5-3 .8z"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <path d="M9.5 4l2.5 2.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+    </svg>
+  )
+}
+
+function IconDownload() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M8 1.75v9M4.5 7.5L8 11l3.5-3.5M2.5 13.25h11"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  )
+}
+
+function IconTrash() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M3 4.5h10M6 4.5V3a1 1 0 011-1h2a1 1 0 011 1v1.5M4.5 4.5l.6 8.1a1 1 0 001 .9h3.8a1 1 0 001-.9l.6-8.1M6.8 7.5v4M9.2 7.5v4"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  )
+}
+
+function IconStitch() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+      <rect x="1.25" y="4.5" width="5" height="7" rx="0.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <rect x="9.75" y="4.5" width="5" height="7" rx="0.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6.5 8h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
   )
 }
 
@@ -249,6 +668,7 @@ function GalleryCard({
 
 function StitchBar({
   items, title, onTitleChange, onMove, onRemove, onClear, onStitch, stitching,
+  onBulkDelete, bulkDeleting,
 }: {
   items: GalleryItem[]
   title: string
@@ -258,6 +678,8 @@ function StitchBar({
   onClear: () => void
   onStitch: () => void
   stitching: boolean
+  onBulkDelete: () => void
+  bulkDeleting: boolean
 }) {
   return (
     <div className="stitch-bar animate-fade-in">
@@ -298,8 +720,15 @@ function StitchBar({
           onChange={e => onTitleChange(e.target.value)}
         />
         <button
+          className="stitch-bar-delete"
+          disabled={items.length < 1 || bulkDeleting || stitching}
+          onClick={onBulkDelete}
+        >
+          {bulkDeleting ? 'Deleting…' : `Delete ${items.length}`}
+        </button>
+        <button
           className="stitch-bar-submit"
-          disabled={items.length < 2 || stitching}
+          disabled={items.length < 2 || stitching || bulkDeleting}
           onClick={onStitch}
         >
           {stitching ? 'Stitching…' : `Stitch ${items.length} clips →`}

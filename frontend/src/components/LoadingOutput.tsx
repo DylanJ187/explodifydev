@@ -40,11 +40,9 @@ function ExplodeCube() {
   )
 }
 
-export function LoadingOutput({ phase, jobStatus }: Props) {
+export function LoadingOutput({ phase }: Props) {
   const headline = PHASE_HEADLINE[phase]
   const sub = PHASE_SUB[phase]
-  const step = jobStatus?.current_phase_name ?? null
-  const currentPhase = jobStatus?.current_phase ?? (phase === 'orientation' ? 0 : 1)
 
   return (
     <div className="loading-output animate-fade-in">
@@ -57,32 +55,6 @@ export function LoadingOutput({ phase, jobStatus }: Props) {
         <div className="loading-text">
           <div className="loading-headline">{headline}</div>
           <div className="loading-sub">{sub}</div>
-          {step && (
-            <div className="loading-step">
-              <span className="loading-step-tag">STEP {currentPhase}/4</span>
-              <span className="loading-step-name">{step}</span>
-            </div>
-          )}
-        </div>
-
-        <div className="loading-phases">
-          {[1, 2, 3, 4].map(p => {
-            const status = jobStatus?.phases?.[p]
-            const isDone = status === 'done'
-            const isRunning = status === 'running'
-            const isError = status === 'error'
-            const cls = [
-              'loading-phase',
-              isDone ? 'loading-phase--done' : '',
-              isRunning ? 'loading-phase--running' : '',
-              isError ? 'loading-phase--error' : '',
-            ].filter(Boolean).join(' ')
-            return (
-              <div key={p} className={cls}>
-                <span className="loading-phase-num">{p}</span>
-              </div>
-            )
-          })}
         </div>
 
       </div>

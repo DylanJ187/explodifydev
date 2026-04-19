@@ -44,21 +44,47 @@ export function CustomVideoPlayer({
   useEffect(() => {
     const v = videoRef.current
     if (!v) return
-    const onPlay = () => setPlaying(true)
-    const onPause = () => setPlaying(false)
-    const onTime = () => setCurrent(v.currentTime)
+    let rafId = 0
+
+    const tick = () => {
+      if (videoRef.current) setCurrent(videoRef.current.currentTime)
+      rafId = requestAnimationFrame(tick)
+    }
+    const startRaf = () => {
+      if (!rafId) rafId = requestAnimationFrame(tick)
+    }
+    const stopRaf = () => {
+      if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
+    }
+
+    const onPlay = () => { setPlaying(true); startRaf() }
+    const onPause = () => { setPlaying(false); stopRaf(); setCurrent(v.currentTime) }
+    const onEnded = () => { stopRaf(); setCurrent(v.currentTime) }
+    const onSeeked = () => setCurrent(v.currentTime)
+    const onTime = () => { if (!rafId) setCurrent(v.currentTime) }
     const onMeta = () => setDuration(v.duration)
     const onProg = () => {
       if (v.buffered.length > 0) setBuffered(v.buffered.end(v.buffered.length - 1))
     }
+
     v.addEventListener('play', onPlay)
+    v.addEventListener('playing', onPlay)
     v.addEventListener('pause', onPause)
+    v.addEventListener('ended', onEnded)
+    v.addEventListener('seeked', onSeeked)
     v.addEventListener('timeupdate', onTime)
     v.addEventListener('loadedmetadata', onMeta)
     v.addEventListener('progress', onProg)
+
+    if (!v.paused) startRaf()
+
     return () => {
+      stopRaf()
       v.removeEventListener('play', onPlay)
+      v.removeEventListener('playing', onPlay)
       v.removeEventListener('pause', onPause)
+      v.removeEventListener('ended', onEnded)
+      v.removeEventListener('seeked', onSeeked)
       v.removeEventListener('timeupdate', onTime)
       v.removeEventListener('loadedmetadata', onMeta)
       v.removeEventListener('progress', onProg)
@@ -136,12 +162,11 @@ export function CustomVideoPlayer({
       <span className="cvp-corner cvp-corner--bl" aria-hidden />
       <span className="cvp-corner cvp-corner--br" aria-hidden />
 
-      {/* Watermark — always visible, louder for free tier */}
+      {/* Watermark — display-only overlay (never burned into the video
+          or sent to external services). Shown for locked/preview tier. */}
       {!canDownload && (
         <div className="cvp-watermark" aria-hidden>
-          <span className="cvp-watermark-dot" />
           <span className="cvp-watermark-text">{watermark}</span>
-          <span className="cvp-watermark-trial">free tier · preview</span>
         </div>
       )}
 

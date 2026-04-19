@@ -10,7 +10,7 @@ export default function RootRedirect() {
   }
 
   if (session) {
-    return <Navigate to="/dashboard" replace />
+    return <Navigate to="/gallery" replace />
   }
 
   return <LandingPage />

@@ -12,7 +12,7 @@ export default function LoginPage() {
 
   useEffect(() => {
     if (!loading && session) {
-      navigate('/dashboard', { replace: true })
+      navigate('/gallery', { replace: true })
     }
   }, [session, loading, navigate])
 

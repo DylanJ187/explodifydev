@@ -16,7 +16,7 @@ export default function AuthCallback() {
         setErrorMsg(error.message)
         return
       }
-      navigate('/dashboard', { replace: true })
+      navigate('/gallery', { replace: true })
     }
 
     exchange()

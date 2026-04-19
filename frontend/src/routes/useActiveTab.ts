@@ -2,16 +2,14 @@ import { useLocation } from 'react-router-dom'
 import type { NavTab } from '../components/TopNav'
 
 const PATH_TO_TAB: Record<string, NavTab> = {
-  '/dashboard': 'home',
-  '/studio': 'studio',
   '/gallery': 'gallery',
+  '/studio': 'studio',
   '/profile': 'profile',
 }
 
 const TAB_TO_PATH: Record<NavTab, string> = {
-  home: '/dashboard',
-  studio: '/studio',
   gallery: '/gallery',
+  studio: '/studio',
   profile: '/profile',
 }
 
@@ -22,7 +20,7 @@ export function useActiveTab(): NavTab {
       return tab
     }
   }
-  return 'studio'
+  return 'gallery'
 }
 
 export function pathForTab(tab: NavTab): string {

@@ -192,9 +192,96 @@ export async function stitchGalleryItems(
   if (title) form.append('title', title)
   const resp = await fetch('/stitch', { method: 'POST', body: form })
   if (!resp.ok) {
-    const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
-    throw new Error(detail.detail ?? resp.statusText)
+    await throwGalleryError(resp)
   }
+  return resp.json()
+}
+
+// ── Save / capacity / favorite ──────────────────────────────────────────────
+
+export type GalleryTier = 'free' | 'pro' | 'studio'
+
+export interface GalleryStats {
+  count: number
+  cap: number
+  tier: GalleryTier
+}
+
+export class GalleryFullError extends Error {
+  readonly savedCount: number
+  readonly cap: number
+  readonly tier: GalleryTier
+  constructor(savedCount: number, cap: number, tier: GalleryTier) {
+    super(`Gallery full: ${savedCount}/${cap} (${tier})`)
+    this.name = 'GalleryFullError'
+    this.savedCount = savedCount
+    this.cap = cap
+    this.tier = tier
+  }
+}
+
+async function throwGalleryError(resp: Response): Promise<never> {
+  const body = await resp.json().catch(() => null)
+  const detail = body?.detail
+  if (resp.status === 409 && detail && typeof detail === 'object' && detail.error === 'gallery_full') {
+    throw new GalleryFullError(
+      Number(detail.saved_count ?? 0),
+      Number(detail.cap ?? 0),
+      (detail.tier ?? 'free') as GalleryTier,
+    )
+  }
+  const message = typeof detail === 'string' ? detail : detail?.error ?? resp.statusText
+  throw new Error(message)
+}
+
+export async function getGalleryStats(): Promise<GalleryStats> {
+  const resp = await fetch('/gallery/stats')
+  if (!resp.ok) throw new Error(`Gallery stats failed: ${resp.statusText}`)
+  return resp.json()
+}
+
+export async function saveToGallery(options: {
+  jobId: string
+  variant: VariantName
+  kind: Exclude<GalleryKind, 'stitched'>
+  title?: string
+}): Promise<GalleryItem> {
+  const form = new FormData()
+  form.append('job_id', options.jobId)
+  form.append('variant', options.variant)
+  form.append('kind', options.kind)
+  if (options.title) form.append('title', options.title)
+  const resp = await fetch('/gallery', { method: 'POST', body: form })
+  if (!resp.ok) await throwGalleryError(resp)
+  return resp.json()
+}
+
+export async function replaceGalleryItem(options: {
+  replaceId: string
+  jobId: string
+  variant: VariantName
+  kind: Exclude<GalleryKind, 'stitched'>
+  title?: string
+}): Promise<GalleryItem> {
+  const form = new FormData()
+  form.append('replace_id', options.replaceId)
+  form.append('job_id', options.jobId)
+  form.append('variant', options.variant)
+  form.append('kind', options.kind)
+  if (options.title) form.append('title', options.title)
+  const resp = await fetch('/gallery/replace', { method: 'POST', body: form })
+  if (!resp.ok) await throwGalleryError(resp)
+  return resp.json()
+}
+
+export async function toggleFavorite(
+  itemId: string,
+  favorite: boolean,
+): Promise<GalleryItem> {
+  const form = new FormData()
+  form.append('favorite', String(favorite))
+  const resp = await fetch(`/gallery/${itemId}/favorite`, { method: 'POST', body: form })
+  if (!resp.ok) throw new Error(`Favorite toggle failed: ${resp.statusText}`)
   return resp.json()
 }
 
@@ -204,6 +291,70 @@ export function galleryVideoUrl(itemId: string): string {
 
 export function galleryThumbnailUrl(itemId: string): string {
   return `/gallery/${itemId}/thumbnail`
+}
+
+// ── Account / Profile ───────────────────────────────────────────────────────
+
+export interface AccountProfile {
+  user_id: string
+  full_name: string | null
+  username: string | null
+  email: string | null
+  phone: string | null
+  avatar_path: string | null
+  work_type: string | null
+  axis_preference: string | null
+  render_prefs: string | null
+  preferences: Record<string, Record<string, boolean | string>>
+  created_at: number
+  updated_at: number
+}
+
+export interface AccountUpdate {
+  full_name?: string
+  username?: string
+  email?: string
+  phone?: string
+  work_type?: string
+  axis_preference?: string
+  render_prefs?: string
+  preferences?: Record<string, Record<string, boolean | string>>
+  avatar?: File
+}
+
+export async function getAccount(): Promise<AccountProfile> {
+  const resp = await fetch('/account/me')
+  if (!resp.ok) throw new Error(`Account load failed: ${resp.statusText}`)
+  return resp.json()
+}
+
+export async function updateAccount(fields: AccountUpdate): Promise<AccountProfile> {
+  const form = new FormData()
+  if (fields.full_name       !== undefined) form.append('full_name',       fields.full_name)
+  if (fields.username        !== undefined) form.append('username',        fields.username)
+  if (fields.email           !== undefined) form.append('email',           fields.email)
+  if (fields.phone           !== undefined) form.append('phone',           fields.phone)
+  if (fields.work_type       !== undefined) form.append('work_type',       fields.work_type)
+  if (fields.axis_preference !== undefined) form.append('axis_preference', fields.axis_preference)
+  if (fields.render_prefs    !== undefined) form.append('render_prefs',    fields.render_prefs)
+  if (fields.preferences     !== undefined) form.append('preferences',     JSON.stringify(fields.preferences))
+  if (fields.avatar)                        form.append('avatar',          fields.avatar)
+
+  const resp = await fetch('/account', { method: 'POST', body: form })
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => null)
+    throw new Error(body?.detail ?? resp.statusText)
+  }
+  return resp.json()
+}
+
+export async function signOutEverywhere(): Promise<void> {
+  const resp = await fetch('/account/signout-all', { method: 'POST' })
+  if (!resp.ok) throw new Error(`Sign out failed: ${resp.statusText}`)
+}
+
+export function avatarUrl(bust?: number): string {
+  return bust ? `/account/avatar?v=${bust}` : '/account/avatar'
 }
 
 // ── Approval ────────────────────────────────────────────────────────────────

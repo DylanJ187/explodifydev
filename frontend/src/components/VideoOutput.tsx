@@ -1,10 +1,11 @@
 // frontend/src/components/VideoOutput.tsx
 import { useState } from 'react'
 import type { ReactElement } from 'react'
-import type { VariantName } from '../api/client'
+import type { LoopMode, VariantName } from '../api/client'
 import type { StyleOptions, RestyleEntry } from '../App'
 import { StylePanel } from './StylePanel'
 import { CustomVideoPlayer } from './CustomVideoPlayer'
+import { SaveToGalleryButton } from './SaveToGalleryButton'
 
 // TODO: wire to real auth/plan state — for now, treat all users as Free Tier.
 // Free tier blocks download & adds watermark to discourage redistribution.
@@ -17,6 +18,7 @@ interface Props {
   styleOptions: StyleOptions
   restyleStack: RestyleEntry[]
   onRestyle: (opts: StyleOptions, variants: VariantName[]) => void
+  loopMode: LoopMode
 }
 
 const VARIANT_LABELS: Record<VariantName, string> = {
@@ -31,23 +33,36 @@ function VideoPlayer({
   jobId,
   variant,
   downloadName,
+  baseKind,
+  saveTitle,
   stageOverlay,
+  defaultLoop = false,
 }: {
   jobId: string
   variant: VariantName
   downloadName: string
+  baseKind: 'base' | 'styled'
+  saveTitle?: string
   stageOverlay?: ReactElement | false
+  defaultLoop?: boolean
 }) {
-  const [showLoop, setShowLoop] = useState(false)
+  const [showLoop, setShowLoop] = useState(defaultLoop)
   const videoUrl = `/jobs/${jobId}/video/${variant}`
   const loopUrl = `/jobs/${jobId}/loop_video/${variant}`
   const src = showLoop ? loopUrl : videoUrl
+  const saveKind: 'base' | 'styled' | 'loop' = showLoop ? 'loop' : baseKind
 
   return (
     <div className="video-variant-card">
       <div className="video-variant-header">
         <span className="video-variant-label">{VARIANT_LABELS[variant]}</span>
         <div className="video-variant-controls">
+          <SaveToGalleryButton
+            jobId={jobId}
+            variant={variant}
+            kind={saveKind}
+            title={saveTitle}
+          />
           <button
             className={`video-loop-toggle ${showLoop ? 'video-loop-toggle--active' : ''}`}
             onClick={() => setShowLoop(v => !v)}
@@ -102,7 +117,7 @@ function SkeletonCard({ entry, generation }: { entry: RestyleEntry; generation: 
 
 // ─── Restyle done card ────────────────────────────────────────────────────────
 
-function RestyleCard({ entry, generation }: { entry: RestyleEntry; generation: number }) {
+function RestyleCard({ entry, generation, defaultLoop }: { entry: RestyleEntry; generation: number; defaultLoop: boolean }) {
   if (entry.status === 'generating') {
     return <SkeletonCard entry={entry} generation={generation} />
   }
@@ -135,6 +150,9 @@ function RestyleCard({ entry, generation }: { entry: RestyleEntry; generation: n
             jobId={entry.jobId}
             variant={v}
             downloadName={`explodify_gen${generation}_${v}_${entry.jobId}.mp4`}
+            baseKind="styled"
+            saveTitle={`AI styled · gen ${generation} · ${v.toUpperCase()} axis`}
+            defaultLoop={defaultLoop}
           />
         ))}
       </div>
@@ -239,10 +257,12 @@ export function VideoOutput({
   styleOptions,
   restyleStack,
   onRestyle,
+  loopMode,
 }: Props) {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const hasGenerating = restyleStack.some(e => e.status === 'generating')
   const totalGens = restyleStack.length + 1
+  const defaultLoop = loopMode === 'loop-preview'
 
   function handleSubmit(opts: StyleOptions, variants: VariantName[]) {
     setDrawerOpen(false)
@@ -262,6 +282,7 @@ export function VideoOutput({
           key={entry.jobId}
           entry={entry}
           generation={totalGens - idx}
+          defaultLoop={defaultLoop}
         />
       ))}
 
@@ -287,6 +308,9 @@ export function VideoOutput({
               jobId={jobId}
               variant={v}
               downloadName={`explodify_${v}_${aiStyled ? 'styled' : 'base'}_${jobId}.mp4`}
+              baseKind={aiStyled ? 'styled' : 'base'}
+              saveTitle={`${aiStyled ? 'AI styled' : 'Base render'} · ${v.toUpperCase()} axis`}
+              defaultLoop={defaultLoop}
               stageOverlay={idx === selectedVariants.length - 1 && !drawerOpen ? (
                 <RestyleOverlayBtn
                   disabled={hasGenerating}
