@@ -35,12 +35,9 @@ const MATERIAL_PRESETS = [
 ]
 
 const STYLE_TAGS = [
-  { label: 'Black void',  phrase: 'pure black infinite void background' },
-  { label: 'Grey void',   phrase: 'neutral mid-grey infinite void background' },
-  { label: 'White void',  phrase: 'pure white infinite void background' },
   { label: 'Warm light',  phrase: 'warm 3800K three-point area lighting, soft amber fill' },
   { label: 'Cool light',  phrase: 'cool 6500K neutral area lighting, clinical precision' },
-  { label: 'Rim light',   phrase: 'sharp rim light separating components from background' },
+  { label: 'Realistic',   phrase: 'tactile micro-surface detail, accurate specular reflections, crisp Fresnel falloff, subtle wear and fingerprint-scale imperfections, commercial packshot realism' },
 ]
 
 function countChars(rows: Row[], prompt: string): number {
@@ -197,14 +194,19 @@ export function StylePanel({
       {/* Style notes */}
       <div className="prompt-section">
         <span className="prompt-section-label">Style notes</span>
-        <textarea
-          className="style-prompt"
-          rows={2}
-          placeholder="Lighting, backdrop, mood, colour..."
-          value={options.prompt}
-          onChange={e => updatePrompt(e.target.value)}
-          disabled={disabled}
-        />
+        <div className="style-prompt-wrap">
+          <textarea
+            className="style-prompt"
+            rows={3}
+            placeholder="Briefly describe the object, then lighting, mood, colour..."
+            value={options.prompt}
+            onChange={e => updatePrompt(e.target.value)}
+            disabled={disabled}
+          />
+          <span className={['style-prompt-counter', overLimit ? 'style-prompt-counter--over' : ''].filter(Boolean).join(' ')}>
+            {used} / {MAX_SHARED_CHARS}
+          </span>
+        </div>
         <div className="tag-bar">
           {STYLE_TAGS.map(({ label, phrase }) => {
             const active = options.prompt.includes(phrase)

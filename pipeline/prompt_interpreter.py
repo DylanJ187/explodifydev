@@ -23,7 +23,7 @@ _RENDER_STYLE = (
     "Surfaces carry high-resolution micro-detail: visible grain, weave, brushed striations, "
     "fingerprint-scale wear, fine specular highlights, subtle normal-map relief — "
     "textures read as tactile and hand-crafted under close inspection. "
-    "Background: pure infinite void, solid colour or smooth gradient, no seams, horizon, or backdrop edges. "
+    "Background: preserve the exact source background colour pixel-for-pixel — do not recolour, gradient, tint, or add horizon, seams, or backdrop edges. "
     "Lighting: soft area lights, no ground shadow, no floor reflection. "
     "No lens flare, bloom, glow, motion blur, bokeh, or chromatic aberration. "
     "Flicker-free exposure and materials across all frames."
@@ -56,6 +56,10 @@ _ATMOSPHERIC_TERMS = (
     "atmospheric", "atmosphere", "particles", "volumetric", "god ray",
 )
 
+# Kling v2v endpoints reject prompts over 2500 chars. Leave margin for safety
+# so off-by-one or endpoint drift doesn't surface as a late-stage API 400.
+_FAL_PROMPT_CHAR_LIMIT = 2400
+
 
 def _style_mentions_atmosphere(style_prompt: str) -> bool:
     low = style_prompt.lower()
@@ -78,7 +82,22 @@ def build_fal_prompt(
     if style_prompt.strip():
         sections.append(style_prompt.strip())
     sections.append(_GEOMETRY_REASSERT)
-    return " ".join(sections)
+    return _clamp_to_limit(" ".join(sections))
+
+
+def _clamp_to_limit(prompt: str) -> str:
+    """Hard-clamp the final prompt under the Kling endpoint char limit.
+
+    Trims from the middle (user/material content) rather than the tail, so the
+    geometry reassertion at the end — the single most load-bearing clause —
+    always survives.
+    """
+    if len(prompt) <= _FAL_PROMPT_CHAR_LIMIT:
+        return prompt
+    tail = " " + _GEOMETRY_REASSERT
+    head_budget = _FAL_PROMPT_CHAR_LIMIT - len(tail) - 1
+    head = prompt[: max(0, head_budget)].rstrip(" ,")
+    return f"{head}{tail}"
 
 
 def _build_rows_section(rows: list[dict]) -> str:

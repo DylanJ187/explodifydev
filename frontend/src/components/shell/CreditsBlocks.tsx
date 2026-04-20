@@ -1,4 +1,4 @@
-const BLOCK_COUNT = 8
+import { CreditIcon } from '../StylePanel'
 
 interface CreditsBlocksProps {
   remaining: number
@@ -9,36 +9,21 @@ interface CreditsBlocksProps {
 
 export function CreditsBlocks({ remaining, total, onClick, label = 'Credits remaining' }: CreditsBlocksProps) {
   const ratio = total > 0 ? Math.max(0, Math.min(1, remaining / total)) : 0
-  const filledCount = Math.round(ratio * BLOCK_COUNT)
   const low = ratio < 0.3 && total > 0
 
   const body = (
     <>
-      <span className="credits-blocks__label">
-        <span className="credits-blocks__label-text">{label}:</span>
-        <span className="credits-blocks__count">
-          {remaining}
-          <span className="credits-blocks__sep" aria-hidden>/</span>
-          {total}
-        </span>
-      </span>
-      <span className="credits-blocks__track" aria-hidden>
-        {Array.from({ length: BLOCK_COUNT }).map((_, i) => (
-          <span
-            key={i}
-            className={`credits-blocks__block ${i < filledCount ? 'credits-blocks__block--filled' : ''}`}
-          />
-        ))}
-      </span>
+      <CreditIcon size={13} />
+      <span className="credits-chip__count">{remaining}</span>
     </>
   )
 
-  const className = `credits-blocks ${low ? 'credits-blocks--low' : ''}`
-  const ariaLabel = `${remaining} of ${total} credits remaining`
+  const className = `credits-chip ${low ? 'credits-chip--low' : ''}`
+  const ariaLabel = `${remaining} of ${total} credits remaining. ${label}.`
 
   if (onClick) {
     return (
-      <button type="button" className={className} onClick={onClick} aria-label={`${ariaLabel}. Click to upgrade.`}>
+      <button type="button" className={className} onClick={onClick} aria-label={`${ariaLabel} Click to manage.`}>
         {body}
       </button>
     )

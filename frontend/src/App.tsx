@@ -1,8 +1,9 @@
 // frontend/src/App.tsx
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { UploadZone } from './components/UploadZone'
 import { StylePanel } from './components/StylePanel'
+import { BackdropPicker } from './components/BackdropPicker'
 import { EasingEditor, ORBIT_EASING_PRESETS, CINEMATIC_EXPLOSION_SAMPLES, CINEMATIC_ORBIT_SAMPLES } from './components/EasingEditor'
 import type { OrbitMode, OrbitDirection } from './components/orientation/createViewer'
 import { MeshViewer } from './components/MeshViewer'
@@ -20,18 +21,20 @@ import { Gallery } from './components/Gallery'
 import { Profile } from './components/Profile'
 import { JobQueueProvider, useJobQueue } from './contexts/JobQueueContext'
 import { JobQueueIndicator } from './components/JobQueueIndicator'
-import { getPreviewImages, createJob, getJobStatus, approvePhase4, restyleJob } from './api/client'
+import { getPreviewImages, createJob, getJobStatus, approvePhase4, restyleJob, galleryVideoUrl, styleGalleryItem, GalleryFullError } from './api/client'
 import type { JobStatus, ModelTier, PreviewResult, VariantName } from './api/client'
 import { ConfirmCreditsModal, shouldSkipConfirm, setSkipConfirm } from './components/ConfirmCreditsModal'
 import { ProceedToStyleButton } from './components/ProceedToStyleButton'
 import { ModelSelector } from './components/ModelSelector'
 import { PricingModal } from './components/shell/PricingModal'
+import { ReplaceGalleryModal } from './components/ReplaceGalleryModal'
 import RequireAuth from './routes/RequireAuth'
 import RootRedirect from './routes/RootRedirect'
 import { useActiveTab, pathForTab } from './routes/useActiveTab'
 import LoginPage from './pages/LoginPage'
 import AuthCallback from './pages/AuthCallback'
 import LandingPage from './pages/LandingPage'
+import { loadStudio, saveStudio, clearStudio, isPersistableState } from './lib/studioStorage'
 
 type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'awaiting_approval' | 'styling' | 'done' | 'error'
 
@@ -89,43 +92,79 @@ function AppInner() {
   const tab: NavTab = useActiveTab()
   const navigate = useNavigate()
   const location = useLocation()
-  const routeState = location.state as { initialPrompt?: string } | null
+  const routeState = location.state as {
+    initialPrompt?: string
+    styleFromGallery?: { galleryId: string; variant: VariantName; title: string }
+  } | null
   const initialPrompt = routeState?.initialPrompt
+  const styleFromGallery = routeState?.styleFromGallery
 
-  const [state, setState] = useState<AppState>('idle')
-  const [jobId, setJobId] = useState<string | null>(null)
+  // Rehydrate once on mount. Stored snapshot only ever resurrects settled
+  // states; transient ones (uploading/error) never wrote in the first place.
+  const snapshot = useMemo(() => loadStudio(), [])
+
+  const [state, setState] = useState<AppState>(snapshot?.state ?? 'idle')
+  const [jobId, setJobId] = useState<string | null>(snapshot?.jobId ?? null)
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null)
-  const [preview, setPreview] = useState<PreviewResult | null>(null)
+  const [preview, setPreview] = useState<PreviewResult | null>(snapshot?.preview ?? null)
   const [uploadedFile, setUploadedFile] = useState<File | null>(null)
-  const [orbitRangeDeg, setOrbitRangeDeg] = useState(40)
-  const [explodeScalar, setExplodeScalar] = useState(1.5)
-  const [cameraZoom, setCameraZoom] = useState(1.0)
-  const [styleOptions, setStyleOptions] = useState<StyleOptions>(DEFAULT_STYLE)
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(snapshot?.uploadedFileName ?? null)
+  const [orbitRangeDeg, setOrbitRangeDeg] = useState(snapshot?.orbitRangeDeg ?? 40)
+  const [explodeScalar, setExplodeScalar] = useState(snapshot?.explodeScalar ?? 1.5)
+  const [cameraZoom, setCameraZoom] = useState(snapshot?.cameraZoom ?? 1.0)
+  const [styleOptions, setStyleOptions] = useState<StyleOptions>(snapshot?.styleOptions ?? DEFAULT_STYLE)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
-  const [selectedVariant, setSelectedVariant] = useState<VariantName>('y')
-  const [easingCurve, setEasingCurve] = useState<number[]>(DEFAULT_EASING)
-  const [orbitMode, setOrbitMode] = useState<OrbitMode>('horizontal')
-  const [orbitDirection, setOrbitDirection] = useState<OrbitDirection>(1)
-  const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(DEFAULT_ORBIT_EASING)
-  const [modelTier, setModelTier] = useState<ModelTier>('premium')
+  const [selectedVariant, setSelectedVariant] = useState<VariantName>(snapshot?.selectedVariant ?? 'y')
+  const [easingCurve, setEasingCurve] = useState<number[]>(snapshot?.easingCurve ?? DEFAULT_EASING)
+  const [orbitMode, setOrbitMode] = useState<OrbitMode>(snapshot?.orbitMode ?? 'horizontal')
+  const [orbitDirection, setOrbitDirection] = useState<OrbitDirection>(snapshot?.orbitDirection ?? 1)
+  const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(snapshot?.orbitEasingCurve ?? DEFAULT_ORBIT_EASING)
+  const [modelTier, setModelTier] = useState<ModelTier>(snapshot?.modelTier ?? 'premium')
+  const [backdropColor, setBackdropColor] = useState<string>(snapshot?.backdropColor ?? '#000000')
   const [pendingApprove, setPendingApprove] = useState<null | { variants: VariantName[] }>(null)
+  const [replaceModal, setReplaceModal] = useState<null | {
+    variants: VariantName[]
+    savedCount: number
+    cap: number
+  }>(null)
+  const [fromGalleryContext, setFromGalleryContext] = useState<null | {
+    galleryId: string
+    variant: VariantName
+  }>(snapshot?.fromGalleryContext ?? null)
   const creditsRemaining = 30
   const creditsTotal = 30
   const { enqueue: enqueueJob } = useJobQueue()
-  const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode; orbitDirection: OrbitDirection } | null>(null)
-  const [restyleStack, setRestyleStack] = useState<RestyleEntry[]>([])
-  const [cameraDirection, setCameraDirection] = useState<[number, number, number]>([0.3, 0.3, 1.0])
+  const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode; orbitDirection: OrbitDirection } | null>(snapshot?.renderedSettings ?? null)
+  const [restyleStack, setRestyleStack] = useState<RestyleEntry[]>(snapshot?.restyleStack ?? [])
+  const [cameraDirection, setCameraDirection] = useState<[number, number, number]>(snapshot?.cameraDirection ?? [0.3, 0.3, 1.0])
   const meshViewerRef = useRef<MeshViewerHandle | null>(null)
-  const lastSubmittedDirection = useRef<[number, number, number]>([0.3, 0.3, 1.0])
+  const lastSubmittedDirection = useRef<[number, number, number]>(snapshot?.cameraDirection ?? [0.3, 0.3, 1.0])
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const restyleStackRef = useRef<RestyleEntry[]>(restyleStack)
   restyleStackRef.current = restyleStack
+  // Snapshot of the last actionable state captured before each risky call.
+  // Drives "Try again" after an error — lands the user on the step they were on,
+  // not a wiped-clean idle.
+  const preErrorSnapshotRef = useRef<{ state: AppState; jobId: string | null } | null>(null)
 
   useEffect(() => {
     if (initialPrompt) {
       setStyleOptions(s => ({ ...s, prompt: initialPrompt }))
     }
   }, [initialPrompt])
+
+  useEffect(() => {
+    if (!styleFromGallery) return
+    if (state !== 'idle') return
+    setJobId(`gallery-${styleFromGallery.galleryId}`)
+    setSelectedVariant(styleFromGallery.variant)
+    setFromGalleryContext({
+      galleryId: styleFromGallery.galleryId,
+      variant: styleFromGallery.variant,
+    })
+    setState('awaiting_approval')
+    navigate(location.pathname, { replace: true, state: null })
+  }, [styleFromGallery, state, navigate, location.pathname])
 
   const settingsChanged = renderedSettings !== null && (
     renderedSettings.explodeScalar !== explodeScalar ||
@@ -138,6 +177,8 @@ function AppInner() {
   async function handleUpload(file: File) {
     setErrorMsg(null)
     setUploadedFile(file)
+    setUploadedFileName(file.name)
+    preErrorSnapshotRef.current = { state: 'idle', jobId: null }
     try {
       setState('uploading')
       const result = await getPreviewImages(file)
@@ -159,6 +200,7 @@ function AppInner() {
   async function handleGenerate(variantsToRender?: VariantName[]) {
     if (!preview) return
     setErrorMsg(null)
+    preErrorSnapshotRef.current = { state: 'orientation', jobId: null }
     // Read direction imperatively so snap animations in progress don't cause stale state.
     const dir = meshViewerRef.current?.getCameraDirection() ?? cameraDirection
     lastSubmittedDirection.current = dir
@@ -180,12 +222,14 @@ function AppInner() {
         orbitEasingCurve,
         variantsToRender,
         modelTier,
+        backdropColor,
       })
       setJobId(id)
       setJobStatus(null)
+      const baseName = (uploadedFile?.name ?? uploadedFileName ?? 'Render').replace(/\.[^/.]+$/, '')
       enqueueJob(
         id,
-        `${uploadedFile?.name?.replace(/\.[^/.]+$/, '') ?? 'Render'} · ${selectedVariant.toUpperCase()} axis`,
+        `${baseName} · ${selectedVariant.toUpperCase()} axis`,
         { pinnedToCurrent: true },
       )
       setRenderedSettings({ explodeScalar, orbitRangeDeg, cameraZoom, orbitMode, orbitDirection })
@@ -272,16 +316,40 @@ function AppInner() {
     return () => clearInterval(interval)
   }, [hasGeneratingRestyle])
 
-  async function handleApprove(variants: VariantName[]) {
+  async function handleApprove(variants: VariantName[], replaceId?: string) {
     if (!jobId) return
+    preErrorSnapshotRef.current = { state: 'awaiting_approval', jobId }
     try {
-      await approvePhase4(jobId, variants, {
-        rows: styleOptions.rows,
-        stylePrompt: styleOptions.prompt,
-        modelTier,
-      })
-      setState('styling')
+      if (fromGalleryContext) {
+        const { jobId: newJobId } = await styleGalleryItem(fromGalleryContext.galleryId, {
+          rows: styleOptions.rows,
+          stylePrompt: styleOptions.prompt,
+          modelTier,
+          replaceId,
+        })
+        setJobId(newJobId)
+        setJobStatus(null)
+        setFromGalleryContext(null)
+        enqueueJob(
+          newJobId,
+          `Gallery restyle · ${variants.map(v => v.toUpperCase()).join('/')}`,
+          { pinnedToCurrent: true },
+        )
+        setState('styling')
+      } else {
+        await approvePhase4(jobId, variants, {
+          rows: styleOptions.rows,
+          stylePrompt: styleOptions.prompt,
+          modelTier,
+          replaceId,
+        })
+        setState('styling')
+      }
     } catch (err) {
+      if (err instanceof GalleryFullError) {
+        setReplaceModal({ variants, savedCount: err.savedCount, cap: err.cap })
+        return
+      }
       setErrorMsg(err instanceof Error ? err.message : 'Approval failed')
       setState('error')
     }
@@ -293,6 +361,7 @@ function AppInner() {
     setJobStatus(null)
     setPreview(null)
     setUploadedFile(null)
+    setUploadedFileName(null)
     setOrbitRangeDeg(40)
     setExplodeScalar(1.5)
     setCameraZoom(1.0)
@@ -306,8 +375,61 @@ function AppInner() {
     setErrorMsg(null)
     setRestyleStack([])
     setCameraDirection([0.3, 0.3, 1.0])
+    setFromGalleryContext(null)
     lastSubmittedDirection.current = [0.3, 0.3, 1.0]
+    preErrorSnapshotRef.current = null
+    clearStudio()
   }
+
+  // Try-again: restore the last actionable step the user was on. Falls back to
+  // idle only when no snapshot was captured (e.g., an error outside our flows).
+  function handleTryAgain() {
+    const snap = preErrorSnapshotRef.current
+    setErrorMsg(null)
+    if (!snap) {
+      setState('idle')
+      setJobId(null)
+      return
+    }
+    setState(snap.state)
+    setJobId(snap.jobId)
+  }
+
+  // Debounced writer: any change in a persisted field queues a 200ms save.
+  // Writes skip transient states (uploading, error) via isPersistableState.
+  useEffect(() => {
+    if (!isPersistableState(state)) return
+    const t = window.setTimeout(() => {
+      saveStudio({
+        state,
+        jobId,
+        preview,
+        uploadedFileName: uploadedFile?.name ?? uploadedFileName,
+        orbitRangeDeg,
+        explodeScalar,
+        cameraZoom,
+        styleOptions,
+        selectedVariant,
+        easingCurve,
+        orbitMode,
+        orbitDirection,
+        orbitEasingCurve,
+        modelTier,
+        backdropColor,
+        cameraDirection,
+        renderedSettings,
+        restyleStack,
+        fromGalleryContext,
+      })
+    }, 200)
+    return () => window.clearTimeout(t)
+  }, [
+    state, jobId, preview, uploadedFile, uploadedFileName,
+    orbitRangeDeg, explodeScalar, cameraZoom, styleOptions,
+    selectedVariant, easingCurve, orbitMode, orbitDirection,
+    orbitEasingCurve, modelTier, backdropColor, cameraDirection,
+    renderedSettings, restyleStack, fromGalleryContext,
+  ])
 
   const showControls = state === 'orientation' || state === 'processing' || state === 'awaiting_approval' || state === 'styling' || state === 'done'
   const controlsDisabled = state !== 'orientation' && state !== 'awaiting_approval'
@@ -322,8 +444,8 @@ function AppInner() {
         <button
           type="button"
           className="wordmark wordmark--button"
-          onClick={() => navigate(pathForTab('gallery'))}
-          aria-label="Go to gallery"
+          onClick={() => navigate('/landing')}
+          aria-label="Go to landing page"
         >
           <CubeLogo size={30} className="wordmark__cube" />
           <span className="wordmark__text">EXPLOD<em>I</em>FY</span>
@@ -408,6 +530,15 @@ function AppInner() {
 
               {state === 'orientation' && (
                 <>
+                  <section className="panel-section animate-fade-in">
+                    <div className="section-label">Backdrop</div>
+                    <BackdropPicker
+                      value={backdropColor}
+                      onChange={setBackdropColor}
+                      disabled={false}
+                    />
+                  </section>
+
                   <section className="panel-section animate-fade-in">
                     <div className="section-label">Explosion Profile</div>
                     <EasingEditor
@@ -499,7 +630,10 @@ function AppInner() {
               <div className="error-box">
                 <span className="error-label">Error</span>
                 <p className="error-msg">{errorMsg ?? 'Something went wrong'}</p>
-                <button className="error-retry" onClick={reset}>Try again</button>
+                <div className="error-actions">
+                  <button className="error-retry" onClick={handleTryAgain}>Try again</button>
+                  <button className="error-restart" onClick={reset}>Restart</button>
+                </div>
               </div>
             </section>
           )}
@@ -515,7 +649,7 @@ function AppInner() {
           <LoadingOutput phase="orientation" jobStatus={null} />
         )}
 
-        {state === 'orientation' && preview && uploadedFile && (
+        {state === 'orientation' && preview && (
           <MeshViewer
             ref={meshViewerRef}
             file={uploadedFile}
@@ -549,6 +683,8 @@ function AppInner() {
             selectedVariant={selectedVariant}
             modelTier={modelTier}
             creditsRemaining={creditsRemaining}
+            videoSrc={fromGalleryContext ? galleryVideoUrl(fromGalleryContext.galleryId) : undefined}
+            hideAdjust={!!fromGalleryContext}
             onApprove={(variants) => {
               if (shouldSkipConfirm()) {
                 handleApprove(variants)
@@ -595,6 +731,17 @@ function AppInner() {
           if (pending) handleApprove(pending.variants)
         }}
       />
+      <ReplaceGalleryModal
+        open={replaceModal !== null}
+        savedCount={replaceModal?.savedCount ?? 0}
+        cap={replaceModal?.cap ?? 0}
+        onCancel={() => setReplaceModal(null)}
+        onConfirm={(victimId) => {
+          const pending = replaceModal
+          setReplaceModal(null)
+          if (pending) handleApprove(pending.variants, victimId)
+        }}
+      />
     </div>
   )
 }
@@ -606,6 +753,8 @@ function DualApprovalGate({
   selectedVariant,
   modelTier,
   creditsRemaining,
+  videoSrc,
+  hideAdjust,
   onApprove,
   onAdjust,
   onSkip,
@@ -614,11 +763,13 @@ function DualApprovalGate({
   selectedVariant: VariantName
   modelTier: ModelTier
   creditsRemaining: number
+  videoSrc?: string
+  hideAdjust?: boolean
   onApprove: (variants: VariantName[]) => void
   onAdjust: () => void
   onSkip: () => void
 }) {
-  const videoUrl = `/jobs/${jobId}/base_video/${selectedVariant}`
+  const videoUrl = videoSrc ?? `/jobs/${jobId}/base_video/${selectedVariant}`
   const downloadName = `explodify_${selectedVariant}_base_${jobId}.mp4`
   const durationLabel = '3S @ 24FPS'
   const frameLabel = '72 FRAMES'
@@ -666,9 +817,11 @@ function DualApprovalGate({
             kind="base"
             title={`Unstyled · ${selectedVariant.toUpperCase()} axis`}
           />
-          <button className="review-redo-btn review-adjust-btn" onClick={onAdjust}>
-            ← Adjust Explosion
-          </button>
+          {!hideAdjust && (
+            <button className="review-redo-btn review-adjust-btn" onClick={onAdjust}>
+              ← Adjust Explosion
+            </button>
+          )}
           <button className="review-redo-btn" onClick={onSkip}>
             ↺ Start Over
           </button>

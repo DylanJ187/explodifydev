@@ -13,6 +13,24 @@ export interface JobStatus {
   error: string | null
   ai_styled: boolean
   has_dual_variants: boolean
+  eta_seconds: number | null
+  started_at: number | null
+}
+
+export interface PendingRender {
+  job_id: string
+  kind: 'styled' | 'loop'
+  source_id: string | null
+  source_kind: GalleryKind | null
+  title: string
+  thumbnail_path: string | null
+  variant: string | null
+  model_tier: ModelTier | null
+  started_at: number
+  eta_seconds: number | null
+  remaining_seconds: number | null
+  phase: number
+  status: JobStatus['status']
 }
 
 export type FaceName =
@@ -95,6 +113,7 @@ export async function createJob(
     orbitEasingCurve?: number[]
     variantsToRender?: VariantName[]
     modelTier?: ModelTier
+    backdropColor?: string
   },
 ): Promise<string> {
   const form = new FormData()
@@ -122,6 +141,9 @@ export async function createJob(
   }
   if (options.modelTier) {
     form.append('model_tier', options.modelTier)
+  }
+  if (options.backdropColor) {
+    form.append('backdrop_color', options.backdropColor)
   }
 
   const resp = await fetch('/jobs', { method: 'POST', body: form })
@@ -318,6 +340,37 @@ export function galleryVideoUrl(itemId: string): string {
   return `/gallery/${itemId}/video`
 }
 
+export async function styleGalleryItem(
+  itemId: string,
+  options: {
+    rows: Row[]
+    stylePrompt: string
+    modelTier?: ModelTier
+    replaceId?: string
+  },
+): Promise<{ jobId: string; etaSeconds: number | null }> {
+  const form = new FormData()
+  form.append('component_rows', JSON.stringify(options.rows))
+  form.append('style_prompt', options.stylePrompt)
+  if (options.modelTier) {
+    form.append('model_tier', options.modelTier)
+  }
+  if (options.replaceId) {
+    form.append('replace_id', options.replaceId)
+  }
+  const resp = await fetch(`/gallery/${itemId}/style`, { method: 'POST', body: form })
+  if (!resp.ok) await throwGalleryError(resp)
+  const data = await resp.json()
+  return { jobId: data.job_id as string, etaSeconds: data.eta_seconds ?? null }
+}
+
+export async function listPendingRenders(): Promise<PendingRender[]> {
+  const resp = await fetch('/gallery/pending')
+  if (!resp.ok) throw new Error(`Pending renders failed: ${resp.statusText}`)
+  const data = await resp.json()
+  return (data.items ?? []) as PendingRender[]
+}
+
 export function galleryThumbnailUrl(itemId: string): string {
   return `/gallery/${itemId}/thumbnail`
 }
@@ -395,8 +448,9 @@ export async function approvePhase4(
     rows: Row[]
     stylePrompt: string
     modelTier?: ModelTier
+    replaceId?: string
   },
-): Promise<void> {
+): Promise<{ etaSeconds: number | null }> {
   const form = new FormData()
   form.append('selected_variants', selectedVariants.join(','))
   if (styleOpts) {
@@ -405,8 +459,13 @@ export async function approvePhase4(
     if (styleOpts.modelTier) {
       form.append('model_tier', styleOpts.modelTier)
     }
+    if (styleOpts.replaceId) {
+      form.append('replace_id', styleOpts.replaceId)
+    }
   }
   const resp = await fetch(`/jobs/${jobId}/approve`, { method: 'POST', body: form })
-  if (!resp.ok) throw new Error(`Approval failed: ${resp.statusText}`)
+  if (!resp.ok) await throwGalleryError(resp)
+  const data = await resp.json().catch(() => ({ eta_seconds: null }))
+  return { etaSeconds: data.eta_seconds ?? null }
 }
 

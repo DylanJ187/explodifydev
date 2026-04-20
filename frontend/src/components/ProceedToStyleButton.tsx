@@ -8,6 +8,17 @@ interface Props {
   onProceed: () => void
 }
 
+function IconSparkle() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+      <path
+        d="M8 1.5 L9.3 6.7 L14.5 8 L9.3 9.3 L8 14.5 L6.7 9.3 L1.5 8 L6.7 6.7 Z"
+        fill="currentColor"
+      />
+    </svg>
+  )
+}
+
 export function ProceedToStyleButton({
   modelTier,
   creditsRemaining,
@@ -26,7 +37,10 @@ export function ProceedToStyleButton({
       onClick={onProceed}
       disabled={insufficient}
     >
-      <span className="apply-style-btn-label">Apply Styling</span>
+      <span className="apply-style-btn-row">
+        <IconSparkle />
+        <span className="apply-style-btn-label">Apply Styling</span>
+      </span>
       <span className="apply-style-btn-cost">{cost} credits</span>
     </button>
   )

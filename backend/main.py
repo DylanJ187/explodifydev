@@ -60,6 +60,43 @@ VARIANT_NAMES = ("x", "y", "z")
 # come from the authenticated user record.
 TIER_CAPS: dict[str, int] = {"free": 20, "pro": 100, "studio": 250}
 
+# ETA reference per Kling tier (seconds). Tuned to the average round-trip
+# observed in production (premium averages ~110s end-to-end, the others
+# cluster within the same window). The prompt-length penalty adds a small
+# constant on top. These are best-effort estimates surfaced to the UI —
+# jobs can finish earlier or later without any functional impact.
+_TIER_BASE_ETA: dict[str, int] = {
+    "standard": 120,
+    "high_quality": 120,
+    "premium": 120,
+}
+
+
+def _parse_hex_bg(hex_str: str) -> list[float]:
+    """Parse a #RRGGBB string into an RGBA list of floats in [0, 1].
+
+    Invalid input falls back to opaque black.
+    """
+    s = (hex_str or "").strip().lstrip("#")
+    if len(s) != 6:
+        return [0.0, 0.0, 0.0, 1.0]
+    try:
+        r = int(s[0:2], 16) / 255.0
+        g = int(s[2:4], 16) / 255.0
+        b = int(s[4:6], 16) / 255.0
+    except ValueError:
+        return [0.0, 0.0, 0.0, 1.0]
+    return [r, g, b, 1.0]
+
+
+def _estimate_eta_seconds(model_tier: str, prompt: str, loop: bool = False) -> int:
+    base = _TIER_BASE_ETA.get(model_tier, _TIER_BASE_ETA["premium"])
+    # Prompt-length penalty: roughly +1s per 12 chars, capped at +60s.
+    prompt_penalty = min(60, max(0, len(prompt or "")) // 12)
+    # Loop styling adds a short ffmpeg reverse+concat step at the end.
+    loop_penalty = 10 if loop else 0
+    return base + prompt_penalty + loop_penalty
+
 
 def _current_tier() -> str:
     return os.environ.get("EXPLODIFY_TIER", "free").lower()
@@ -274,6 +311,7 @@ async def create_job(
     orbit_direction: int = Form(1),
     orbit_easing: Optional[str] = Form(None),
     model_tier: str = Form("premium"),
+    backdrop_color: str = Form("#000000"),
 ):
     if preview_id:
         matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
@@ -354,6 +392,7 @@ async def create_job(
             orbit_direction=parsed_orbit_direction,
             orbit_easing=parsed_orbit_easing,
             model_tier=parsed_model_tier,
+            backdrop_color=backdrop_color,
         )
     )
 
@@ -391,6 +430,7 @@ async def approve_job(
     style_prompt: Optional[str] = Form(None),
     selected_variants: Optional[str] = Form(None),
     model_tier: Optional[str] = Form(None),
+    replace_id: Optional[str] = Form(None),
 ):
     job = jobs.get_job(job_id)
     if job is None:
@@ -400,6 +440,24 @@ async def approve_job(
             status_code=409,
             detail=f"Job is not awaiting approval (status: {job.status})",
         )
+
+    # Capacity check before committing paid credits. Replace flow is exempt —
+    # the caller has already chosen a victim.
+    if not replace_id:
+        cap = _current_cap()
+        count = gallery_store.count()
+        if count >= cap:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "gallery_full",
+                    "saved_count": count,
+                    "cap": cap,
+                    "tier": _current_tier(),
+                },
+            )
+    elif gallery_store.get_item(replace_id) is None:
+        raise HTTPException(status_code=404, detail="Replacement target not found")
 
     import json as _json
     style_overrides = None
@@ -423,12 +481,27 @@ async def approve_job(
     if selected_variants:
         variants = [v.strip() for v in selected_variants.split(",") if v.strip() in VARIANT_NAMES]
 
+    # Flag the job for autosave + optional replace. ETA estimate lets the
+    # gallery placeholder show a countdown while Kling is running.
+    resolved_tier = (style_overrides or {}).get("model_tier") or "premium"
+    jobs.set_meta(
+        job_id,
+        eta_seconds=_estimate_eta_seconds(resolved_tier, style_prompt or ""),
+        pending_gallery=True,
+        pending_kind="styled",
+        pending_variant=(variants[0] if variants else None),
+        pending_title="Studio styled render",
+        model_tier=resolved_tier,
+        autosave=True,
+        replace_id=replace_id,
+    )
+
     signalled = jobs.approve_phase4(
         job_id, style_overrides=style_overrides, selected_variants=variants,
     )
     if not signalled:
         raise HTTPException(status_code=409, detail="Approval event already consumed")
-    return {"ok": True}
+    return {"ok": True, "eta_seconds": jobs.get_meta(job_id).get("eta_seconds")}
 
 
 @app.get("/jobs/{job_id}/base_video/{variant}")
@@ -487,6 +560,16 @@ def list_gallery(kind: Optional[str] = None, limit: int = 200):
     kind_filter = kind if kind in allowed_kinds else None
     items = gallery_store.list_items(kind=kind_filter, limit=limit)  # type: ignore[arg-type]
     return {"items": items}
+
+
+@app.get("/gallery/pending")
+def list_pending_renders():
+    """Return in-flight styled/looped jobs flagged for gallery autosave.
+
+    The Gallery view merges these with saved items and renders a placeholder
+    card (shimmer + ETA countdown) for each entry until the job completes.
+    """
+    return {"items": jobs.list_pending_gallery()}
 
 
 @app.get("/gallery/stats")
@@ -901,6 +984,119 @@ async def create_gallery_loop(item_id: str, title: Optional[str] = Form(None)):
 # ────────────────────────────────────────────────────────────────────────────
 
 
+def _extract_first_seconds(source: Path, dest: Path, seconds: float = 3.0) -> None:
+    """Copy the first `seconds` of `source` to `dest` via ffmpeg re-encode.
+
+    Re-encoding (instead of stream-copy) avoids keyframe alignment issues that
+    would otherwise produce a partially-black first clip.
+    """
+    import subprocess as _sp
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    _sp.run(
+        [
+            "ffmpeg", "-y",
+            "-i", str(source),
+            "-t", f"{seconds:.3f}",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p",
+            "-an",
+            str(dest),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+@app.post("/gallery/{item_id}/style", status_code=202)
+async def style_gallery_item(
+    item_id: str,
+    component_rows: str = Form("[]"),
+    style_prompt: str = Form(""),
+    model_tier: str = Form("premium"),
+    replace_id: Optional[str] = Form(None),
+):
+    item = gallery_store.get_item(item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Gallery item not found")
+    if item["kind"] not in ("base", "stitched", "loop"):
+        raise HTTPException(status_code=422, detail="This item cannot be styled")
+
+    source_path = Path(item["video_path"])
+    if not source_path.exists():
+        raise HTTPException(status_code=410, detail="Source video file missing")
+
+    # Capacity check: reject early if no room and no replace target supplied.
+    cap = _current_cap()
+    count = gallery_store.count()
+    if count >= cap and not replace_id:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "gallery_full",
+                "saved_count": count,
+                "cap": cap,
+                "tier": _current_tier(),
+            },
+        )
+    if replace_id and gallery_store.get_item(replace_id) is None:
+        raise HTTPException(status_code=404, detail="Replacement target not found")
+
+    import json as _json
+    try:
+        parsed_rows: list[dict] = _json.loads(component_rows)
+        if not isinstance(parsed_rows, list):
+            parsed_rows = []
+    except Exception:
+        parsed_rows = []
+
+    new_job_id = jobs.create_job()
+    new_dir = UPLOAD_DIR / new_job_id
+    new_dir.mkdir(parents=True, exist_ok=True)
+
+    variant = item.get("variant") if item["kind"] == "base" else None
+    if variant not in VARIANT_NAMES:
+        variant = "x"
+
+    is_loop = item["kind"] == "loop"
+    staged_base = new_dir / f"base_video_{variant}.mp4"
+
+    if is_loop:
+        # Loops are palindromes of a 3s forward clip. Kling bills per input
+        # second, so we only send the forward half and rebuild the palindrome
+        # ourselves after styling.
+        try:
+            await asyncio.to_thread(_extract_first_seconds, source_path, staged_base, 3.0)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500, detail=f"Failed to prepare loop source: {exc}")
+    else:
+        import shutil as _shutil
+        _shutil.copy2(source_path, staged_base)
+
+    parsed_tier = model_tier if model_tier in ("standard", "high_quality", "premium") else "premium"
+
+    jobs.set_meta(
+        new_job_id,
+        eta_seconds=_estimate_eta_seconds(parsed_tier, style_prompt, loop=is_loop),
+        pending_gallery=True,
+        pending_kind="loop" if is_loop else "styled",
+        pending_variant=variant,
+        pending_title=(f"{item['title']} · styled loop" if is_loop else f"{item['title']} · styled"),
+        source_id=item_id,
+        source_kind=item["kind"],
+        source_thumbnail_path=item.get("thumbnail_path"),
+        model_tier=parsed_tier,
+        autosave=True,
+        replace_id=replace_id,
+        is_loop_styling=is_loop,
+    )
+
+    asyncio.create_task(
+        _run_phase4_only(new_job_id, parsed_rows, style_prompt, [variant], parsed_tier)
+    )
+
+    return {"job_id": new_job_id, "eta_seconds": jobs.get_meta(new_job_id).get("eta_seconds")}
+
+
 @app.post("/jobs/{job_id}/restyle", status_code=202)
 async def restyle_job(
     job_id: str,
@@ -954,6 +1150,12 @@ async def _run_phase4_only(
     model_tier: str = "premium",
 ) -> None:
     output_dir = UPLOAD_DIR / job_id
+    meta = jobs.get_meta(job_id)
+    is_loop_styling = bool(meta.get("is_loop_styling"))
+    autosave = bool(meta.get("autosave"))
+    replace_id = meta.get("replace_id")
+    source_id = meta.get("source_id")
+
     try:
         fal_key = os.environ.get("FAL_KEY", "") if _FAL_ENABLED else ""
         if not fal_key:
@@ -961,6 +1163,7 @@ async def _run_phase4_only(
             logging.warning("FAL_KEY not set; skipping restyle phase 4")
             jobs.update_phase(job_id, 4, "done")
             jobs.mark_done(job_id, ai_styled=False)
+            jobs.clear_meta(job_id)
             return
 
         jobs.update_phase(job_id, 4, "running")
@@ -984,23 +1187,75 @@ async def _run_phase4_only(
         if style_tasks:
             await asyncio.gather(*style_tasks)
 
-        # Gallery auto-save for the restyle flow. Loops are produced on demand
-        # from a gallery item — no longer generated at render time.
-        for variant in variants:
-            styled_path = output_dir / f"final_video_{variant}.mp4"
-            if styled_path.exists():
-                _register_gallery_video(
-                    video_path=styled_path, kind="styled",
-                    title=f"Restyle · {variant.upper()} axis",
-                    job_id=job_id, variant=variant,
-                    metadata={"style_prompt": style_prompt, "style": "styled", "restyle": True},
+        # If this is a loop styling job, the styled output is only the forward
+        # 3s half. Rebuild the 6s palindrome before autosaving so the user's
+        # gallery card shows the full loop, not a truncated clip.
+        if is_loop_styling:
+            from pipeline.phase3_assemble import FrameAssembler
+            assembler = FrameAssembler()
+            for variant in variants:
+                forward = output_dir / f"final_video_{variant}.mp4"
+                if not forward.exists():
+                    continue
+                looped = output_dir / f"final_loop_{variant}.mp4"
+                try:
+                    await asyncio.to_thread(assembler.reverse_and_concat, forward, looped)
+                except Exception as exc:  # noqa: BLE001
+                    import logging
+                    logging.warning("Loop reverse+concat failed for %s: %s", variant, exc)
+
+        # Gallery auto-save. Paid renders are persisted without user action —
+        # the UI can always delete afterwards. Loop-styled jobs save the
+        # reversed+concatted 6s file; regular styled jobs save the raw output.
+        if autosave:
+            for variant in variants:
+                if is_loop_styling:
+                    video_path = output_dir / f"final_loop_{variant}.mp4"
+                    if not video_path.exists():
+                        continue
+                    kind = "loop"
+                    title = meta.get("pending_title") or f"Styled loop · {variant.upper()}"
+                else:
+                    video_path = output_dir / f"final_video_{variant}.mp4"
+                    if not video_path.exists():
+                        continue
+                    kind = "styled"
+                    title = meta.get("pending_title") or f"Styled · {variant.upper()} axis"
+
+                # Replace flow: delete victim *after* the new item is registered
+                # so we never leave the gallery without the in-progress entry.
+                new_item = _register_gallery_video(
+                    video_path=video_path,
+                    kind=kind,
+                    title=title,
+                    job_id=job_id,
+                    variant=variant,
+                    metadata={
+                        "style_prompt": style_prompt,
+                        "model_tier": model_tier,
+                        "source_id": source_id,
+                        "autosaved": True,
+                    },
                 )
+                if new_item is not None and replace_id:
+                    victim = gallery_store.get_item(replace_id)
+                    if victim is not None:
+                        gallery_store.delete_item(replace_id)
+                        if victim["kind"] in ("stitched", "loop"):
+                            try:
+                                Path(victim["video_path"]).unlink(missing_ok=True)
+                                if victim.get("thumbnail_path"):
+                                    Path(victim["thumbnail_path"]).unlink(missing_ok=True)
+                            except Exception:
+                                pass
 
         jobs.update_phase(job_id, 4, "done")
         jobs.mark_done(job_id, ai_styled=len(style_tasks) > 0)
+        jobs.clear_meta(job_id)
 
     except Exception as exc:
         jobs.mark_error(job_id, 4, str(exc))
+        jobs.clear_meta(job_id)
 
 
 async def _run_pipeline(
@@ -1020,6 +1275,7 @@ async def _run_pipeline(
     orbit_direction: int = 1,
     orbit_easing: list[float] | None = None,
     model_tier: str = "premium",
+    backdrop_color: str = "#000000",
 ) -> None:
     _variants = variants_to_render or list(VARIANT_NAMES)
     output_dir = UPLOAD_DIR / job_id
@@ -1053,6 +1309,7 @@ async def _run_pipeline(
             orbit_mode=orbit_mode,
             orbit_direction=orbit_direction,
             orbit_easing=orbit_easing,
+            bg_color=_parse_hex_bg(backdrop_color),
         )
 
         variant_vecs = {"x": x_vecs, "y": y_vecs, "z": z_vecs}
@@ -1134,12 +1391,48 @@ async def _run_pipeline(
         if style_tasks:
             await asyncio.gather(*style_tasks)
 
-        # Styled renders stay on disk under jobs/{id}/ until the client saves
-        # them via POST /gallery. Loops are produced on demand from the gallery.
+        # Autosave paid renders on completion. The approval endpoint marks
+        # pending_gallery=True for any approved job; here we persist each
+        # styled variant and, if a replace target was queued, evict it.
+        pipeline_meta = jobs.get_meta(job_id)
+        if pipeline_meta.get("autosave"):
+            replace_target = pipeline_meta.get("replace_id")
+            for variant in selected:
+                styled_path = output_dir / f"final_video_{variant}.mp4"
+                if not styled_path.exists():
+                    continue
+                new_item = _register_gallery_video(
+                    video_path=styled_path,
+                    kind="styled",
+                    title=f"Studio styled · {variant.upper()} axis",
+                    job_id=job_id,
+                    variant=variant,
+                    metadata={
+                        "style_prompt": style_prompt,
+                        "model_tier": model_tier,
+                        "autosaved": True,
+                    },
+                )
+                if new_item is not None and replace_target:
+                    victim = gallery_store.get_item(replace_target)
+                    if victim is not None:
+                        gallery_store.delete_item(replace_target)
+                        if victim["kind"] in ("stitched", "loop"):
+                            try:
+                                Path(victim["video_path"]).unlink(missing_ok=True)
+                                if victim.get("thumbnail_path"):
+                                    Path(victim["thumbnail_path"]).unlink(missing_ok=True)
+                            except Exception:
+                                pass
+                    # Single replace only — clear so further variants insert fresh.
+                    replace_target = None
+
         jobs.update_phase(job_id, 4, "done")
         jobs.mark_done(job_id, ai_styled=len(style_tasks) > 0)
+        jobs.clear_meta(job_id)
 
     except Exception as exc:
         current_job = jobs.get_job(job_id)
         phase = current_job.current_phase if current_job else 1
         jobs.mark_error(job_id, phase, str(exc))
+        jobs.clear_meta(job_id)

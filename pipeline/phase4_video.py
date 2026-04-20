@@ -83,8 +83,11 @@ class KlingVideoEditor:
 
         # duration="3" matches the 72-frame 24fps base video exactly.
         # Omitting it lets Kling default to 5s and stretch the motion.
-        result = await asyncio.to_thread(
-            fal_client.subscribe,
+        # Use submit+poll instead of subscribe — Kling o1 runs 5+ min and the
+        # SSE stream `subscribe` uses often drops silently, leaving the call
+        # blocked forever while the job completes on FAL's side.
+        handle = await asyncio.to_thread(
+            fal_client.submit,
             endpoint,
             arguments={
                 "prompt": prompt,
@@ -92,7 +95,28 @@ class KlingVideoEditor:
                 "duration": "3",
             },
         )
+        request_id = handle.request_id
+        print(f"[Phase 4] Submitted request_id={request_id}")
 
+        # Poll with exponential backoff, capped at 15s.  Hard timeout 15 min.
+        deadline = asyncio.get_event_loop().time() + 15 * 60
+        delay = 3.0
+        while True:
+            if asyncio.get_event_loop().time() > deadline:
+                raise TimeoutError(
+                    f"Phase 4 timed out after 15m waiting on request_id={request_id}"
+                )
+            status = await asyncio.to_thread(
+                fal_client.status, endpoint, request_id
+            )
+            if isinstance(status, fal_client.Completed):
+                break
+            await asyncio.sleep(delay)
+            delay = min(delay * 1.5, 15.0)
+
+        result = await asyncio.to_thread(
+            fal_client.result, endpoint, request_id
+        )
         output_url: str = result["video"]["url"]
         file_size = result["video"].get("file_size", 0)
         print(f"[Phase 4] Result ready ({file_size // 1024} KB) → {output_url}")

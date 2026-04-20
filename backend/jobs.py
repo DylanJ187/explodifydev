@@ -1,5 +1,6 @@
 # backend/jobs.py
 import asyncio
+import time
 import uuid
 
 from backend.models import JobStatus, PhaseStatus
@@ -22,6 +23,10 @@ _approval_style: dict[str, dict] = {}
 
 # Which variants the user selected for styling: ["longest", "shortest"], or both.
 _approval_variants: dict[str, list[str]] = {}
+
+# Server-side metadata not exposed on JobStatus. Used by the pending-gallery
+# registry, autosave flow, and ETA reporting. Keyed by job_id.
+_job_meta: dict[str, dict] = {}
 
 
 def create_job() -> str:
@@ -122,4 +127,75 @@ def mark_error(job_id: str, phase: int, message: str) -> None:
         phases=new_phases,
         error=message,
         has_dual_variants=job.has_dual_variants,
+        eta_seconds=_job_meta.get(job_id, {}).get("eta_seconds"),
+        started_at=_job_meta.get(job_id, {}).get("started_at"),
     )
+
+
+# -- Meta: pending-render tracking, ETA, autosave hints ---------------------
+
+
+def set_meta(job_id: str, **fields) -> None:
+    """Attach arbitrary server-side metadata to a job.
+
+    Used for: ETA seconds, pending gallery entries (source thumb/title),
+    autosave intent, replace-on-done target id, and the loop-styling flag.
+    """
+    entry = dict(_job_meta.get(job_id, {}))
+    entry.update(fields)
+    if "started_at" not in entry:
+        entry["started_at"] = time.time()
+    _job_meta[job_id] = entry
+    # Mirror eta/started_at onto JobStatus for API consumers.
+    job = _jobs.get(job_id)
+    if job is not None:
+        _jobs[job_id] = job.model_copy(update={
+            "eta_seconds": entry.get("eta_seconds"),
+            "started_at": entry.get("started_at"),
+        })
+
+
+def get_meta(job_id: str) -> dict:
+    return dict(_job_meta.get(job_id, {}))
+
+
+def clear_meta(job_id: str) -> None:
+    _job_meta.pop(job_id, None)
+
+
+def list_pending_gallery() -> list[dict]:
+    """Return active jobs that are earmarked for gallery autosave.
+
+    Each entry carries the source thumbnail + title so the Gallery can render
+    a placeholder card while the Kling job runs. Jobs in 'done' or 'error'
+    status are excluded — they've either finished saving or been cleared up.
+    """
+    result: list[dict] = []
+    now = time.time()
+    for job_id, meta in list(_job_meta.items()):
+        if not meta.get("pending_gallery"):
+            continue
+        job = _jobs.get(job_id)
+        if job is None or job.status in ("done", "error"):
+            continue
+        started = meta.get("started_at") or now
+        eta = meta.get("eta_seconds") or 0
+        elapsed = max(0.0, now - started)
+        remaining = max(0, int(eta - elapsed)) if eta else None
+        result.append({
+            "job_id": job_id,
+            "kind": meta.get("pending_kind", "styled"),
+            "source_id": meta.get("source_id"),
+            "source_kind": meta.get("source_kind"),
+            "title": meta.get("pending_title") or "Styled render",
+            "thumbnail_path": meta.get("source_thumbnail_path"),
+            "variant": meta.get("pending_variant"),
+            "model_tier": meta.get("model_tier"),
+            "started_at": started,
+            "eta_seconds": eta or None,
+            "remaining_seconds": remaining,
+            "phase": job.current_phase,
+            "status": job.status,
+        })
+    result.sort(key=lambda e: e["started_at"], reverse=True)
+    return result

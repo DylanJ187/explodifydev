@@ -11,7 +11,7 @@ function fileExt(name: string): string {
 }
 
 interface Props {
-  file: File
+  file: File | null
   previewId?: string
   previewImages: Record<FaceName, string>
   explosionAxes: ExplosionAxes | null
@@ -91,7 +91,7 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
     return () => { cancelled = true }
   }, [previewId, file])
 
-  const ext = useMemo(() => fileExt(viewerFile?.name ?? file.name), [viewerFile, file.name])
+  const ext = useMemo(() => fileExt(viewerFile?.name ?? file?.name ?? ''), [viewerFile, file])
   const is3D = viewerFile !== null && THREE_D_FORMATS.includes(ext)
   const [forceStatic] = useState(false)
 
@@ -138,8 +138,15 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
             onOrientationChange={stableOrientationCb.current}
             initialCameraDirection={initialCameraDirection}
           />
+        ) : (viewerFile ?? file) ? (
+          <StaticPreview
+            imageSrc={previewImages['front']}
+            fileName={(viewerFile ?? file)!.name}
+          />
+        ) : previewImages['front'] ? (
+          <StaticPreview imageSrc={previewImages['front']} fileName="model" />
         ) : (
-          <StaticPreview imageSrc={previewImages['front']} fileName={file.name} />
+          <div className="mesh-viewer-loading" />
         )}
 
         {/* Preview frame — top right (moved from bottom-left) */}

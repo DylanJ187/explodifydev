@@ -175,6 +175,7 @@ class SnapshotRenderer:
         orbit_mode: str = "horizontal",
         orbit_direction: int = 1,
         orbit_easing: list[float] | None = None,
+        bg_color: list[float] | None = None,
     ) -> Path:
         """Render num_frames PNGs at VIDEO_RESOLUTION for ffmpeg assembly (Phase 3).
 
@@ -235,6 +236,7 @@ class SnapshotRenderer:
                 resolution=VIDEO_RESOLUTION,
                 camera_zoom=camera_zoom,
                 orbit_mode=orbit_mode,
+                bg_color=bg_color,
             )
             img.save(str(output_dir / f"video_{i:04d}.png"))
 
@@ -266,11 +268,13 @@ class SnapshotRenderer:
         resolution: tuple[int, int] | None = None,
         camera_zoom: float = 1.0,
         orbit_mode: str = "horizontal",
+        bg_color: list[float] | None = None,
     ) -> Image.Image:
         import pyrender
 
+        scene_bg = bg_color if bg_color is not None else [0.0, 0.0, 0.0, 0.0]
         pr_scene = pyrender.Scene(
-            bg_color=[0.0, 0.0, 0.0, 0.0],
+            bg_color=scene_bg,
             ambient_light=[0.35, 0.35, 0.35],
         )
 

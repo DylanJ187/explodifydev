@@ -20,3 +20,5 @@ class JobStatus(BaseModel):
     error: Optional[str] = None
     ai_styled: bool = False   # True when at least one styled video was produced
     has_dual_variants: bool = True
+    eta_seconds: Optional[int] = None   # Estimated total runtime when available
+    started_at: Optional[float] = None  # Unix seconds when ETA countdown began

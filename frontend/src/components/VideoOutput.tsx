@@ -1,6 +1,5 @@
 // frontend/src/components/VideoOutput.tsx
 import { useState } from 'react'
-import type { ReactElement } from 'react'
 import type { VariantName } from '../api/client'
 import type { StyleOptions, RestyleEntry } from '../App'
 import { StylePanel } from './StylePanel'
@@ -35,7 +34,6 @@ function VideoPlayer({
   downloadName,
   baseKind,
   saveTitle,
-  stageOverlay,
   onUpgradeClick,
 }: {
   jobId: string
@@ -43,7 +41,6 @@ function VideoPlayer({
   downloadName: string
   baseKind: 'base' | 'styled'
   saveTitle?: string
-  stageOverlay?: ReactElement | false
   onUpgradeClick?: () => void
 }) {
   const src = `/jobs/${jobId}/video/${variant}`
@@ -68,7 +65,6 @@ function VideoPlayer({
           canDownload={USER_CAN_DOWNLOAD}
           onUpgradeClick={onUpgradeClick}
         />
-        {stageOverlay}
       </div>
     </div>
   )
@@ -231,20 +227,6 @@ function RestyleDrawer({
   )
 }
 
-// ─── Restyle overlay button ───────────────────────────────────────────────────
-
-function RestyleOverlayBtn({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
-  return (
-    <button
-      className="viewer-action-btn"
-      disabled={disabled}
-      onClick={onClick}
-    >
-      ↻ {disabled ? 'Generating...' : 'Re-style with AI'}
-    </button>
-  )
-}
-
 // ─── Root export ─────────────────────────────────────────────────────────────
 
 export function VideoOutput({
@@ -299,7 +281,7 @@ export function VideoOutput({
           </div>
         </div>
         <div className={selectedVariants.length === 1 ? 'video-single-layout' : 'video-dual-layout'}>
-          {selectedVariants.map((v, idx) => (
+          {selectedVariants.map(v => (
             <VideoPlayer
               key={v}
               jobId={jobId}
@@ -308,15 +290,21 @@ export function VideoOutput({
               baseKind={aiStyled ? 'styled' : 'base'}
               saveTitle={`${aiStyled ? 'AI styled' : 'Base render'} · ${v.toUpperCase()} axis`}
               onUpgradeClick={openPricing}
-              stageOverlay={idx === selectedVariants.length - 1 && !drawerOpen ? (
-                <RestyleOverlayBtn
-                  disabled={hasGenerating}
-                  onClick={() => setDrawerOpen(true)}
-                />
-              ) : undefined}
             />
           ))}
         </div>
+        {!drawerOpen && (
+          <div className="video-stack-footer">
+            <button
+              type="button"
+              className="video-stack-action"
+              disabled={hasGenerating}
+              onClick={() => setDrawerOpen(true)}
+            >
+              ↻ {hasGenerating ? 'Generating...' : 'Re-style with AI'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Re-style drawer — renders below when open */}

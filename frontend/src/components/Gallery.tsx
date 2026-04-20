@@ -4,9 +4,9 @@ import { useNavigate } from 'react-router-dom'
 import {
   listGallery, deleteGalleryItem, renameGalleryItem,
   stitchGalleryItems, galleryVideoUrl, galleryThumbnailUrl,
-  toggleFavorite, createGalleryLoop,
+  toggleFavorite, createGalleryLoop, listPendingRenders,
 } from '../api/client'
-import type { GalleryItem, GalleryKind } from '../api/client'
+import type { GalleryItem, GalleryKind, PendingRender } from '../api/client'
 import { CustomVideoPlayer } from './CustomVideoPlayer'
 import { ConfirmModal, PromptModal } from './shell/Modal'
 import { PricingModal } from './shell/PricingModal'
@@ -53,9 +53,23 @@ function formatShortDate(unixSec: number) {
   return `${mm}.${dd}`
 }
 
+function canStyleInStudio(item: GalleryItem): boolean {
+  return item.kind === 'base' || item.kind === 'stitched' || item.kind === 'loop'
+}
+
+function formatRemaining(seconds: number | null): string {
+  if (seconds == null) return '—'
+  const s = Math.max(0, Math.round(seconds))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  const rest = s % 60
+  return rest === 0 ? `${m}m` : `${m}m ${rest}s`
+}
+
 export function Gallery() {
   const navigate = useNavigate()
   const [items, setItems] = useState<GalleryItem[]>([])
+  const [pending, setPending] = useState<PendingRender[]>([])
   const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<FilterKey>('all')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
@@ -69,12 +83,17 @@ export function Gallery() {
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [loopingId, setLoopingId] = useState<string | null>(null)
+  const [clockTick, setClockTick] = useState(0)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await listGallery()
+      const [data, pendingData] = await Promise.all([
+        listGallery(),
+        listPendingRenders().catch(() => [] as PendingRender[]),
+      ])
       setItems(data)
+      setPending(pendingData)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load gallery')
@@ -84,6 +103,35 @@ export function Gallery() {
   }, [])
 
   useEffect(() => { refresh() }, [refresh])
+
+  // Poll pending-render list while any placeholders are in flight. When the
+  // list empties (all jobs completed), refresh items once more to pick up
+  // the autosaved rows, then stop polling.
+  useEffect(() => {
+    if (pending.length === 0) return
+    let cancelled = false
+    const interval = setInterval(async () => {
+      try {
+        const next = await listPendingRenders()
+        if (cancelled) return
+        setPending(next)
+        if (next.length < pending.length) {
+          const data = await listGallery()
+          if (!cancelled) setItems(data)
+        }
+      } catch {
+        // keep polling on transient errors
+      }
+    }, 3000)
+    return () => { cancelled = true; clearInterval(interval) }
+  }, [pending.length])
+
+  // Countdown tick (1Hz) just to re-render pending cards with live remaining.
+  useEffect(() => {
+    if (pending.length === 0) return
+    const t = setInterval(() => setClockTick(c => c + 1), 1000)
+    return () => clearInterval(t)
+  }, [pending.length])
 
   const now = useMemo(() => Math.floor(Date.now() / 1000), [])
 
@@ -228,6 +276,22 @@ export function Gallery() {
     }
   }
 
+  function handleStyleInStudio(item: GalleryItem) {
+    if (!canStyleInStudio(item)) return
+    const variant = item.variant === 'x' || item.variant === 'y' || item.variant === 'z'
+      ? item.variant
+      : 'x'
+    navigate('/studio', {
+      state: {
+        styleFromGallery: {
+          galleryId: item.id,
+          variant,
+          title: item.title,
+        },
+      },
+    })
+  }
+
   async function handleCreateLoop(item: GalleryItem) {
     if (loopingId) return
     setLoopingId(item.id)
@@ -337,6 +401,11 @@ export function Gallery() {
           </div>
         ) : (
           <div className={viewMode === 'grid' ? 'gallery-grid' : 'gallery-list'}>
+            {filter === 'all' || filter === 'recent' || filter === 'favorites'
+              ? pending.map(p => (
+                  <PendingCard key={p.job_id} render={p} mode={viewMode} tick={clockTick} />
+                ))
+              : null}
             {filtered.map(item => (
               <ProjectCard
                 key={item.id}
@@ -351,6 +420,7 @@ export function Gallery() {
                 onRename={() => setRenameTarget(item)}
                 onToggleFavorite={() => handleToggleFavorite(item)}
                 onCreateLoop={() => handleCreateLoop(item)}
+                onStyleInStudio={() => handleStyleInStudio(item)}
               />
             ))}
           </div>
@@ -482,6 +552,7 @@ function EmptyState({ onStart }: { onStart: () => void }) {
 function ProjectCard({
   item, mode, selected, selectionIndex, looping,
   onToggleSelect, onPreview, onDelete, onRename, onToggleFavorite, onCreateLoop,
+  onStyleInStudio,
 }: {
   item: GalleryItem
   mode: 'grid' | 'list'
@@ -494,7 +565,9 @@ function ProjectCard({
   onRename: () => void
   onToggleFavorite: () => void
   onCreateLoop: () => void
+  onStyleInStudio: () => void
 }) {
+  const showStyle = canStyleInStudio(item)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [hovering, setHovering] = useState(false)
   const favorite = isFavorite(item)
@@ -558,6 +631,8 @@ function ProjectCard({
           onClick={e => { e.stopPropagation(); onToggleFavorite() }}
           aria-label={favorite ? 'Unfavorite' : 'Favorite'}
           aria-pressed={favorite}
+          data-tip={favorite ? 'Unfavorite' : 'Favorite'}
+          data-tip-place="below"
         >
           <IconStar filled={favorite} />
         </button>
@@ -569,13 +644,27 @@ function ProjectCard({
       </div>
 
       <div className="project-card-actions">
-        <button
-          className={`project-card-btn project-card-btn--stitch ${selected ? 'project-card-btn--active' : ''}`}
-          onClick={onToggleSelect}
-        >
-          <IconStitch />
-          <span>{selected ? 'Stitching' : 'Stitch'}</span>
-        </button>
+        <div className="project-card-actions-left">
+          <button
+            className={`project-card-btn project-card-btn--stitch ${selected ? 'project-card-btn--active' : ''}`}
+            onClick={onToggleSelect}
+            data-tip={selected ? 'Remove from stitch' : 'Add to stitch'}
+          >
+            <IconStitch />
+            <span>{selected ? 'Stitching' : 'Stitch'}</span>
+          </button>
+          {showStyle && (
+            <button
+              type="button"
+              className="project-card-btn project-card-btn--style"
+              onClick={onStyleInStudio}
+              data-tip="Send to studio for styling"
+            >
+              <IconSparkle />
+              <span>Style</span>
+            </button>
+          )}
+        </div>
         <div className="project-card-icon-group">
           {item.kind !== 'loop' && (
             <button
@@ -584,7 +673,7 @@ function ProjectCard({
               onClick={onCreateLoop}
               disabled={looping}
               aria-label="Create 6s loop"
-              title="Create 6s loop"
+              data-tip={looping ? 'Generating loop…' : 'Create 6s loop'}
             >
               <IconLoop />
             </button>
@@ -594,7 +683,7 @@ function ProjectCard({
             href={galleryVideoUrl(item.id)}
             download={`${item.title.replace(/\s+/g, '_')}.mp4`}
             aria-label="Download"
-            title="Download"
+            data-tip="Download MP4"
             onClick={e => e.stopPropagation()}
           >
             <IconDownload />
@@ -604,7 +693,7 @@ function ProjectCard({
             className="project-card-icon-btn"
             onClick={onRename}
             aria-label="Rename"
-            title="Rename"
+            data-tip="Rename"
           >
             <IconPencil />
           </button>
@@ -613,11 +702,64 @@ function ProjectCard({
             className="project-card-icon-btn project-card-icon-btn--danger"
             onClick={onDelete}
             aria-label="Delete"
-            title="Delete"
+            data-tip="Delete"
           >
             <IconTrash />
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ─── Pending placeholder card ───────────────────────────────────────────────
+
+function PendingCard({
+  render, mode, tick,
+}: {
+  render: PendingRender
+  mode: 'grid' | 'list'
+  tick: number
+}) {
+  // Recompute the client-side countdown each tick. Backend provides a hint
+  // with each poll; we subtract elapsed time between polls so the number
+  // ticks smoothly instead of jumping in 3-second steps.
+  void tick
+  const now = Date.now() / 1000
+  const elapsed = Math.max(0, now - render.started_at)
+  const liveRemaining = render.eta_seconds != null
+    ? render.eta_seconds - elapsed
+    : null
+
+  const kindLabel = render.kind === 'loop' ? 'LOOPING' : 'STYLING'
+  const phaseLabel = render.phase >= 4 ? 'Kling v2v' : 'Preparing…'
+
+  return (
+    <div className={`project-card project-card--${mode} project-card--pending`}>
+      <div className="project-card-thumb project-card-thumb--pending">
+        {render.thumbnail_path && render.source_id
+          ? <img src={galleryThumbnailUrl(render.source_id)} alt="" loading="lazy" />
+          : <div className="project-card-thumb-empty" />}
+        <div className="pending-shimmer" aria-hidden />
+        <div className="pending-overlay">
+          <div className="pending-spinner" aria-hidden />
+          <div className="pending-label">{kindLabel}</div>
+          <div className="pending-eta">
+            {liveRemaining != null && liveRemaining > 0
+              ? <>est. <strong>{formatRemaining(liveRemaining)}</strong> remaining</>
+              : 'finishing up…'}
+          </div>
+        </div>
+        <span className="project-card-kind project-card-kind--pending">QUEUED</span>
+      </div>
+      <div className="project-card-meta">
+        <div className="project-card-title" title={render.title}>{render.title}</div>
+        <div className="project-card-date">{phaseLabel}</div>
+      </div>
+      <div className="project-card-actions project-card-actions--pending">
+        <span className="pending-foot">
+          {render.model_tier ? render.model_tier.replace('_', ' ').toUpperCase() : 'RENDER'} · auto-save on
+        </span>
       </div>
     </div>
   )
@@ -691,6 +833,17 @@ function IconStitch() {
       <rect x="1.25" y="4.5" width="5" height="7" rx="0.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
       <rect x="9.75" y="4.5" width="5" height="7" rx="0.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
       <path d="M6.5 8h3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function IconSparkle() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden>
+      <path
+        d="M8 1.5 L9.3 6.7 L14.5 8 L9.3 9.3 L8 14.5 L6.7 9.3 L1.5 8 L6.7 6.7 Z"
+        fill="currentColor"
+      />
     </svg>
   )
 }
