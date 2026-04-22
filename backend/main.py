@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response
 
 import backend.jobs as jobs
+from backend.auth import UserContext, current_user
 from backend.gallery import GalleryStore
-from backend.profiles import ProfileStore, LOCAL_USER_ID
+from backend.profiles import ProfileStore
 from backend.media_utils import concat_videos, extract_thumbnail, probe_duration
 from backend.models import JobStatus
 
@@ -54,22 +55,27 @@ AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 gallery_store = GalleryStore(GALLERY_DIR / "gallery.db")
 profile_store = ProfileStore(ACCOUNT_DIR / "profiles.db")
 
+# Every non-health route is mounted on this router so Depends(current_user)
+# runs before the handler. Keeping auth at the router level (not per-route)
+# means there's exactly one place to audit the auth boundary. /health stays
+# on the bare app so Fly.io liveness probes don't require a token.
+protected = APIRouter(dependencies=[Depends(current_user)])
+
 VARIANT_NAMES = ("x", "y", "z")
 
 # Tier → saved-item cap. Tier is read from env for now; in future it will
 # come from the authenticated user record.
 TIER_CAPS: dict[str, int] = {"free": 20, "pro": 100, "studio": 250}
 
-# ETA reference per Kling tier (seconds). Tuned to the average round-trip
-# observed in production (premium averages ~110s end-to-end, the others
-# cluster within the same window). The prompt-length penalty adds a small
-# constant on top. These are best-effort estimates surfaced to the UI —
-# jobs can finish earlier or later without any functional impact.
-_TIER_BASE_ETA: dict[str, int] = {
-    "standard": 120,
-    "high_quality": 120,
-    "premium": 120,
-}
+# Base ETA for a Kling o1 v2v render (seconds). Tuned to the average
+# round-trip observed in production (~110s end-to-end). The prompt-length
+# penalty adds a small constant on top. Best-effort estimate surfaced to the
+# UI — jobs can finish earlier or later without any functional impact.
+_BASE_ETA_SECONDS = 120
+
+# Credit cost for one FAL-backed render (pricing-model.md v8). Debited
+# atomically at the phase-4-initiating endpoint; refunded on failure.
+CREDITS_PER_RENDER = 10
 
 
 def _parse_hex_bg(hex_str: str) -> list[float]:
@@ -89,13 +95,12 @@ def _parse_hex_bg(hex_str: str) -> list[float]:
     return [r, g, b, 1.0]
 
 
-def _estimate_eta_seconds(model_tier: str, prompt: str, loop: bool = False) -> int:
-    base = _TIER_BASE_ETA.get(model_tier, _TIER_BASE_ETA["premium"])
+def _estimate_eta_seconds(prompt: str, loop: bool = False) -> int:
     # Prompt-length penalty: roughly +1s per 12 chars, capped at +60s.
     prompt_penalty = min(60, max(0, len(prompt or "")) // 12)
     # Loop styling adds a short ffmpeg reverse+concat step at the end.
     loop_penalty = 10 if loop else 0
-    return base + prompt_penalty + loop_penalty
+    return _BASE_ETA_SECONDS + prompt_penalty + loop_penalty
 
 
 def _current_tier() -> str:
@@ -149,6 +154,7 @@ def _register_gallery_video(
         thumb_out = THUMB_DIR / thumb_name
         thumb = extract_thumbnail(Path(video_path), thumb_out)
         duration = probe_duration(Path(video_path))
+        # TODO(pr2): scope this gallery item to user.user_id once gallery is per-user.
         return gallery_store.add_item(
             kind=kind,
             title=title,
@@ -171,7 +177,7 @@ def health():
 
 
 
-@app.post("/preview")
+@protected.post("/preview")
 async def preview_orientations(file: UploadFile = File(...)):
     preview_id = str(uuid.uuid4())
     suffix = Path(file.filename or "upload.obj").suffix.lower()
@@ -218,7 +224,7 @@ async def preview_orientations(file: UploadFile = File(...)):
     }
 
 
-@app.post("/preview/frame")
+@protected.post("/preview/frame")
 async def get_preview_frame_endpoint(
     preview_id: str = Form(...),
     camera_direction: Optional[str] = Form(None),
@@ -285,7 +291,7 @@ async def get_preview_frame_endpoint(
         raise HTTPException(status_code=500, detail=f"Frame render failed: {exc}")
 
 
-@app.get("/preview/{preview_id}/mesh.glb")
+@protected.get("/preview/{preview_id}/mesh.glb")
 def get_preview_mesh(preview_id: str):
     glb_path = PREVIEW_DIR / f"{preview_id}_viewer.glb"
     if not glb_path.exists():
@@ -293,7 +299,7 @@ def get_preview_mesh(preview_id: str):
     return FileResponse(str(glb_path), media_type="model/gltf-binary")
 
 
-@app.post("/jobs", status_code=202)
+@protected.post("/jobs", status_code=202)
 async def create_job(
     file: Optional[UploadFile] = File(None),
     preview_id: Optional[str] = Form(None),
@@ -310,9 +316,9 @@ async def create_job(
     orbit_mode: str = Form("horizontal"),
     orbit_direction: int = Form(1),
     orbit_easing: Optional[str] = Form(None),
-    model_tier: str = Form("premium"),
     backdrop_color: str = Form("#000000"),
 ):
+    # TODO(pr2): scope _jobs dict by user.user_id once Postgres jobs table lands.
     if preview_id:
         matches = list(PREVIEW_DIR.glob(f"{preview_id}.*"))
         if not matches:
@@ -374,7 +380,6 @@ async def create_job(
 
     parsed_orbit_mode = orbit_mode if orbit_mode in ("horizontal", "vertical") else "horizontal"
     parsed_orbit_direction = orbit_direction if orbit_direction in (1, -1) else 1
-    parsed_model_tier = model_tier if model_tier in ("standard", "high_quality", "premium") else "premium"
 
     asyncio.create_task(
         _run_pipeline(
@@ -391,7 +396,6 @@ async def create_job(
             orbit_mode=parsed_orbit_mode,
             orbit_direction=parsed_orbit_direction,
             orbit_easing=parsed_orbit_easing,
-            model_tier=parsed_model_tier,
             backdrop_color=backdrop_color,
         )
     )
@@ -399,15 +403,16 @@ async def create_job(
     return {"job_id": job_id}
 
 
-@app.get("/jobs/{job_id}", response_model=JobStatus)
+@protected.get("/jobs/{job_id}", response_model=JobStatus)
 def get_job(job_id: str):
+    # TODO(pr2): filter by user.user_id once _jobs dict gains owner scoping.
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
     return job
 
 
-@app.get("/jobs/{job_id}/frames/{frame_name}")
+@protected.get("/jobs/{job_id}/frames/{frame_name}")
 def get_frame(job_id: str, frame_name: str):
     allowed = {"frame_a", "frame_b", "frame_c", "frame_d", "frame_e"}
     if frame_name not in allowed:
@@ -423,15 +428,16 @@ def get_frame(job_id: str, frame_name: str):
     return FileResponse(str(frame_path), media_type="image/png")
 
 
-@app.post("/jobs/{job_id}/approve", status_code=202)
+@protected.post("/jobs/{job_id}/approve", status_code=202)
 async def approve_job(
     job_id: str,
     component_rows: Optional[str] = Form(None),
     style_prompt: Optional[str] = Form(None),
     selected_variants: Optional[str] = Form(None),
-    model_tier: Optional[str] = Form(None),
     replace_id: Optional[str] = Form(None),
+    user: UserContext = Depends(current_user),
 ):
+    # TODO(pr2): verify job ownership by user.user_id once _jobs dict is per-user.
     job = jobs.get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
@@ -459,22 +465,31 @@ async def approve_job(
     elif gallery_store.get_item(replace_id) is None:
         raise HTTPException(status_code=404, detail="Replacement target not found")
 
+    # Debit credits atomically before signalling phase 4. Refund path lives
+    # inside `_run_pipeline` — any failure mode there restores the balance.
+    if not profile_store.try_debit_credits(user.user_id, CREDITS_PER_RENDER):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "insufficient_credits",
+                "required": CREDITS_PER_RENDER,
+                "balance": profile_store.get_credits(user.user_id),
+            },
+        )
+
     import json as _json
     style_overrides = None
-    if component_rows is not None or model_tier is not None:
+    if component_rows is not None:
         parsed_override_rows: list[dict] = []
-        if component_rows is not None:
-            try:
-                parsed_override_rows = _json.loads(component_rows)
-                if not isinstance(parsed_override_rows, list):
-                    parsed_override_rows = []
-            except Exception:
+        try:
+            parsed_override_rows = _json.loads(component_rows)
+            if not isinstance(parsed_override_rows, list):
                 parsed_override_rows = []
-        tier_value = model_tier if model_tier in ("standard", "high_quality", "premium") else None
+        except Exception:
+            parsed_override_rows = []
         style_overrides = {
             "rows": parsed_override_rows,
             "style_prompt": style_prompt or "",
-            "model_tier": tier_value,
         }
 
     variants = None
@@ -483,28 +498,36 @@ async def approve_job(
 
     # Flag the job for autosave + optional replace. ETA estimate lets the
     # gallery placeholder show a countdown while Kling is running.
-    resolved_tier = (style_overrides or {}).get("model_tier") or "premium"
+    # `credits_debited` + `credited_user_id` let the pipeline refund on failure.
     jobs.set_meta(
         job_id,
-        eta_seconds=_estimate_eta_seconds(resolved_tier, style_prompt or ""),
+        eta_seconds=_estimate_eta_seconds(style_prompt or ""),
         pending_gallery=True,
         pending_kind="styled",
         pending_variant=(variants[0] if variants else None),
         pending_title="Studio styled render",
-        model_tier=resolved_tier,
         autosave=True,
         replace_id=replace_id,
+        credits_debited=CREDITS_PER_RENDER,
+        credited_user_id=user.user_id,
     )
 
     signalled = jobs.approve_phase4(
         job_id, style_overrides=style_overrides, selected_variants=variants,
     )
     if not signalled:
+        # Refund: phase 4 can't be signalled, so nothing will ever consume
+        # these credits. Safe to restore immediately.
+        profile_store.refund_credits(user.user_id, CREDITS_PER_RENDER)
         raise HTTPException(status_code=409, detail="Approval event already consumed")
-    return {"ok": True, "eta_seconds": jobs.get_meta(job_id).get("eta_seconds")}
+    return {
+        "ok": True,
+        "eta_seconds": jobs.get_meta(job_id).get("eta_seconds"),
+        "credits_balance": profile_store.get_credits(user.user_id),
+    }
 
 
-@app.get("/jobs/{job_id}/base_video/{variant}")
+@protected.get("/jobs/{job_id}/base_video/{variant}")
 def get_base_video_variant(job_id: str, variant: str):
     from backend.models import PhaseStatus
     if variant not in VARIANT_NAMES:
@@ -520,13 +543,13 @@ def get_base_video_variant(job_id: str, variant: str):
     return FileResponse(str(video_path), media_type="video/mp4")
 
 
-@app.get("/jobs/{job_id}/base_video")
+@protected.get("/jobs/{job_id}/base_video")
 def get_base_video(job_id: str):
     """Legacy endpoint -- serves the longest-axis variant."""
     return get_base_video_variant(job_id, "longest")
 
 
-@app.get("/jobs/{job_id}/video/{variant}")
+@protected.get("/jobs/{job_id}/video/{variant}")
 def get_video_variant(job_id: str, variant: str):
     if variant not in VARIANT_NAMES:
         raise HTTPException(status_code=400, detail=f"Unknown variant: {variant}")
@@ -543,7 +566,7 @@ def get_video_variant(job_id: str, variant: str):
     return FileResponse(str(video_path), media_type="video/mp4")
 
 
-@app.get("/jobs/{job_id}/video")
+@protected.get("/jobs/{job_id}/video")
 def get_video(job_id: str):
     """Legacy endpoint -- serves longest-axis variant."""
     return get_video_variant(job_id, "longest")
@@ -554,26 +577,29 @@ def get_video(job_id: str):
 # ────────────────────────────────────────────────────────────────────────────
 
 
-@app.get("/gallery")
+@protected.get("/gallery")
 def list_gallery(kind: Optional[str] = None, limit: int = 200):
+    # TODO(pr2): filter by user.user_id once gallery_items table has user_id column.
     allowed_kinds = {"base", "styled", "stitched", "loop"}
     kind_filter = kind if kind in allowed_kinds else None
     items = gallery_store.list_items(kind=kind_filter, limit=limit)  # type: ignore[arg-type]
     return {"items": items}
 
 
-@app.get("/gallery/pending")
+@protected.get("/gallery/pending")
 def list_pending_renders():
     """Return in-flight styled/looped jobs flagged for gallery autosave.
 
     The Gallery view merges these with saved items and renders a placeholder
     card (shimmer + ETA countdown) for each entry until the job completes.
     """
+    # TODO(pr2): filter by user.user_id once _jobs dict gains owner scoping.
     return {"items": jobs.list_pending_gallery()}
 
 
-@app.get("/gallery/stats")
+@protected.get("/gallery/stats")
 def gallery_stats():
+    # TODO(pr2): scope count/cap to user.user_id once gallery is per-user.
     return {
         "count": gallery_store.count(),
         "cap": _current_cap(),
@@ -624,6 +650,7 @@ def _save_job_render(
     if extra_metadata:
         metadata.update(extra_metadata)
 
+    # TODO(pr2): scope this gallery item to user.user_id once gallery is per-user.
     return gallery_store.add_item(
         kind=kind,               # type: ignore[arg-type]
         title=display_title,
@@ -636,7 +663,7 @@ def _save_job_render(
     )
 
 
-@app.post("/gallery", status_code=201)
+@protected.post("/gallery", status_code=201)
 def save_to_gallery(
     job_id: str = Form(...),
     variant: str = Form(...),
@@ -648,6 +675,7 @@ def save_to_gallery(
     Returns 409 with {saved_count, cap, tier} when the user is at their tier cap.
     The client should then prompt the user to replace, discard, or go back.
     """
+    # TODO(pr2): tag new item with user.user_id once gallery_items has user_id column.
     cap = _current_cap()
     count = gallery_store.count()
     if count >= cap:
@@ -663,7 +691,7 @@ def save_to_gallery(
     return _save_job_render(job_id=job_id, variant=variant, kind=kind, title=title)
 
 
-@app.post("/gallery/replace", status_code=200)
+@protected.post("/gallery/replace", status_code=200)
 def replace_gallery_item(
     replace_id: str = Form(...),
     job_id: str = Form(...),
@@ -677,6 +705,7 @@ def replace_gallery_item(
     new render. Not truly atomic at the filesystem layer, but the DB is
     consistent: delete-then-insert within one request.
     """
+    # TODO(pr2): verify replace target belongs to user.user_id before deletion.
     victim = gallery_store.get_item(replace_id)
     if victim is None:
         raise HTTPException(status_code=404, detail="Replacement target not found")
@@ -697,7 +726,7 @@ def replace_gallery_item(
     return new_item
 
 
-@app.post("/gallery/{item_id}/favorite")
+@protected.post("/gallery/{item_id}/favorite")
 def set_favorite(item_id: str, favorite: bool = Form(...)):
     item = gallery_store.get_item(item_id)
     if item is None:
@@ -713,7 +742,7 @@ def set_favorite(item_id: str, favorite: bool = Form(...)):
     return {"ok": True, "favorite": next_meta["favorite"]}
 
 
-@app.get("/gallery/{item_id}")
+@protected.get("/gallery/{item_id}")
 def get_gallery_item(item_id: str):
     item = gallery_store.get_item(item_id)
     if item is None:
@@ -721,7 +750,7 @@ def get_gallery_item(item_id: str):
     return item
 
 
-@app.get("/gallery/{item_id}/video")
+@protected.get("/gallery/{item_id}/video")
 def get_gallery_video(item_id: str):
     item = gallery_store.get_item(item_id)
     if item is None:
@@ -732,7 +761,7 @@ def get_gallery_video(item_id: str):
     return FileResponse(str(path), media_type="video/mp4")
 
 
-@app.get("/gallery/{item_id}/thumbnail")
+@protected.get("/gallery/{item_id}/thumbnail")
 def get_gallery_thumbnail(item_id: str):
     item = gallery_store.get_item(item_id)
     if item is None:
@@ -743,7 +772,7 @@ def get_gallery_thumbnail(item_id: str):
     return FileResponse(str(thumb), media_type="image/jpeg")
 
 
-@app.post("/gallery/{item_id}/rename")
+@protected.post("/gallery/{item_id}/rename")
 def rename_gallery_item(item_id: str, title: str = Form(...)):
     clean = (title or "").strip()[:120]
     if not clean:
@@ -754,8 +783,9 @@ def rename_gallery_item(item_id: str, title: str = Form(...)):
     return {"ok": True, "title": clean}
 
 
-@app.delete("/gallery/{item_id}")
+@protected.delete("/gallery/{item_id}")
 def delete_gallery_item(item_id: str):
+    # TODO(pr2): verify item belongs to user.user_id before deletion.
     item = gallery_store.get_item(item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="Gallery item not found")
@@ -774,13 +804,22 @@ def delete_gallery_item(item_id: str):
 # ─────────────────────────────── Account / Profile ───────────────────────────
 
 
-@app.get("/account/me")
-def get_account():
+@protected.get("/account/me")
+def get_account(user: UserContext = Depends(current_user)):
     """Return the current user's profile (seeds defaults on first call)."""
-    return profile_store.get(LOCAL_USER_ID)
+    return profile_store.get(user.user_id)
 
 
-@app.post("/account")
+@protected.get("/account/credits")
+def get_account_credits(user: UserContext = Depends(current_user)):
+    """Return the authenticated user's current credit balance."""
+    return {
+        "balance": profile_store.get_credits(user.user_id),
+        "per_render": CREDITS_PER_RENDER,
+    }
+
+
+@protected.post("/account")
 async def update_account(
     full_name:       Optional[str] = Form(None),
     username:        Optional[str] = Form(None),
@@ -791,6 +830,7 @@ async def update_account(
     render_prefs:    Optional[str] = Form(None),
     preferences:     Optional[str] = Form(None),
     avatar:          Optional[UploadFile] = File(None),
+    user:            UserContext = Depends(current_user),
 ):
     """Update profile fields. All fields optional; only supplied ones change.
 
@@ -804,9 +844,9 @@ async def update_account(
         suffix = Path(avatar.filename).suffix.lower() or ".png"
         if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".gif"}:
             raise HTTPException(status_code=400, detail="unsupported_image_format")
-        dest = AVATAR_DIR / f"{LOCAL_USER_ID}{suffix}"
+        dest = AVATAR_DIR / f"{user.user_id}{suffix}"
         # Remove any previously stored avatar with a different suffix.
-        for existing in AVATAR_DIR.glob(f"{LOCAL_USER_ID}.*"):
+        for existing in AVATAR_DIR.glob(f"{user.user_id}.*"):
             if existing != dest:
                 existing.unlink(missing_ok=True)
         data = await avatar.read()
@@ -823,7 +863,7 @@ async def update_account(
             raise HTTPException(status_code=400, detail=f"invalid_preferences: {exc}")
 
     return profile_store.update(
-        LOCAL_USER_ID,
+        user.user_id,
         full_name=full_name,
         username=username,
         email=email,
@@ -836,23 +876,23 @@ async def update_account(
     )
 
 
-@app.get("/account/avatar")
-def get_account_avatar():
+@protected.get("/account/avatar")
+def get_account_avatar(user: UserContext = Depends(current_user)):
     """Serve the current user's avatar file, if any."""
-    profile = profile_store.get(LOCAL_USER_ID)
+    profile = profile_store.get(user.user_id)
     path = profile.get("avatar_path")
     if not path or not Path(path).exists():
         raise HTTPException(status_code=404, detail="no_avatar")
     return FileResponse(path)
 
 
-@app.post("/account/signout-all")
+@protected.post("/account/signout-all")
 def signout_all_sessions():
     """Stub — real session revocation lands with auth."""
     return {"ok": True, "revoked": 0}
 
 
-@app.post("/stitch", status_code=201)
+@protected.post("/stitch", status_code=201)
 def stitch_gallery_items(
     item_ids: str = Form(...),
     title: Optional[str] = Form(None),
@@ -919,7 +959,7 @@ def stitch_gallery_items(
     return item
 
 
-@app.post("/gallery/{item_id}/loop", status_code=201)
+@protected.post("/gallery/{item_id}/loop", status_code=201)
 async def create_gallery_loop(item_id: str, title: Optional[str] = Form(None)):
     """Palindrome-loop an existing gallery item into a new 6s seamless loop.
 
@@ -1007,13 +1047,13 @@ def _extract_first_seconds(source: Path, dest: Path, seconds: float = 3.0) -> No
     )
 
 
-@app.post("/gallery/{item_id}/style", status_code=202)
+@protected.post("/gallery/{item_id}/style", status_code=202)
 async def style_gallery_item(
     item_id: str,
     component_rows: str = Form("[]"),
     style_prompt: str = Form(""),
-    model_tier: str = Form("premium"),
     replace_id: Optional[str] = Form(None),
+    user: UserContext = Depends(current_user),
 ):
     item = gallery_store.get_item(item_id)
     if item is None:
@@ -1041,6 +1081,18 @@ async def style_gallery_item(
     if replace_id and gallery_store.get_item(replace_id) is None:
         raise HTTPException(status_code=404, detail="Replacement target not found")
 
+    # Credit debit: atomic reservation. Refunded by `_run_phase4_only` on any
+    # failure or if FAL is disabled and no real work gets done.
+    if not profile_store.try_debit_credits(user.user_id, CREDITS_PER_RENDER):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "insufficient_credits",
+                "required": CREDITS_PER_RENDER,
+                "balance": profile_store.get_credits(user.user_id),
+            },
+        )
+
     import json as _json
     try:
         parsed_rows: list[dict] = _json.loads(component_rows)
@@ -1067,16 +1119,15 @@ async def style_gallery_item(
         try:
             await asyncio.to_thread(_extract_first_seconds, source_path, staged_base, 3.0)
         except Exception as exc:  # noqa: BLE001
+            profile_store.refund_credits(user.user_id, CREDITS_PER_RENDER)
             raise HTTPException(status_code=500, detail=f"Failed to prepare loop source: {exc}")
     else:
         import shutil as _shutil
         _shutil.copy2(source_path, staged_base)
 
-    parsed_tier = model_tier if model_tier in ("standard", "high_quality", "premium") else "premium"
-
     jobs.set_meta(
         new_job_id,
-        eta_seconds=_estimate_eta_seconds(parsed_tier, style_prompt, loop=is_loop),
+        eta_seconds=_estimate_eta_seconds(style_prompt, loop=is_loop),
         pending_gallery=True,
         pending_kind="loop" if is_loop else "styled",
         pending_variant=variant,
@@ -1084,27 +1135,33 @@ async def style_gallery_item(
         source_id=item_id,
         source_kind=item["kind"],
         source_thumbnail_path=item.get("thumbnail_path"),
-        model_tier=parsed_tier,
         autosave=True,
         replace_id=replace_id,
         is_loop_styling=is_loop,
+        credits_debited=CREDITS_PER_RENDER,
+        credited_user_id=user.user_id,
     )
 
     asyncio.create_task(
-        _run_phase4_only(new_job_id, parsed_rows, style_prompt, [variant], parsed_tier)
+        _run_phase4_only(new_job_id, parsed_rows, style_prompt, [variant])
     )
 
-    return {"job_id": new_job_id, "eta_seconds": jobs.get_meta(new_job_id).get("eta_seconds")}
+    return {
+        "job_id": new_job_id,
+        "eta_seconds": jobs.get_meta(new_job_id).get("eta_seconds"),
+        "credits_balance": profile_store.get_credits(user.user_id),
+    }
 
 
-@app.post("/jobs/{job_id}/restyle", status_code=202)
+@protected.post("/jobs/{job_id}/restyle", status_code=202)
 async def restyle_job(
     job_id: str,
     component_rows: str = Form("[]"),
     style_prompt: str = Form(""),
     selected_variants: str = Form("x,y,z"),
-    model_tier: str = Form("premium"),
+    user: UserContext = Depends(current_user),
 ):
+    # TODO(pr2): verify source job ownership by user.user_id once _jobs is per-user.
     source_job = jobs.get_job(job_id)
     if source_job is None:
         raise HTTPException(status_code=404, detail="Source job not found")
@@ -1117,6 +1174,17 @@ async def restyle_job(
     available = [v for v in variants if (source_dir / f"base_video_{v}.mp4").exists()]
     if not available:
         raise HTTPException(status_code=425, detail="Base video not ready — cannot restyle")
+
+    # One credit debit per restyle (one FAL pass across the chosen variants).
+    if not profile_store.try_debit_credits(user.user_id, CREDITS_PER_RENDER):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "error": "insufficient_credits",
+                "required": CREDITS_PER_RENDER,
+                "balance": profile_store.get_credits(user.user_id),
+            },
+        )
 
     import json as _json
     try:
@@ -1134,12 +1202,20 @@ async def restyle_job(
     for v in available:
         _shutil.copy2(source_dir / f"base_video_{v}.mp4", new_dir / f"base_video_{v}.mp4")
 
-    parsed_tier = model_tier if model_tier in ("standard", "high_quality", "premium") else "premium"
-    asyncio.create_task(
-        _run_phase4_only(new_job_id, parsed_rows, style_prompt, available, parsed_tier)
+    jobs.set_meta(
+        new_job_id,
+        credits_debited=CREDITS_PER_RENDER,
+        credited_user_id=user.user_id,
     )
 
-    return {"job_id": new_job_id}
+    asyncio.create_task(
+        _run_phase4_only(new_job_id, parsed_rows, style_prompt, available)
+    )
+
+    return {
+        "job_id": new_job_id,
+        "credits_balance": profile_store.get_credits(user.user_id),
+    }
 
 
 async def _run_phase4_only(
@@ -1147,7 +1223,6 @@ async def _run_phase4_only(
     rows: list[dict],
     style_prompt: str,
     variants: list[str],
-    model_tier: str = "premium",
 ) -> None:
     output_dir = UPLOAD_DIR / job_id
     meta = jobs.get_meta(job_id)
@@ -1155,12 +1230,21 @@ async def _run_phase4_only(
     autosave = bool(meta.get("autosave"))
     replace_id = meta.get("replace_id")
     source_id = meta.get("source_id")
+    credits_debited = int(meta.get("credits_debited") or 0)
+    credited_user_id = meta.get("credited_user_id")
+
+    def _refund_if_debited() -> None:
+        if credits_debited > 0 and credited_user_id:
+            profile_store.refund_credits(credited_user_id, credits_debited)
 
     try:
         fal_key = os.environ.get("FAL_KEY", "") if _FAL_ENABLED else ""
         if not fal_key:
             import logging
             logging.warning("FAL_KEY not set; skipping restyle phase 4")
+            # No real render happened → the debit was speculative. Refund it
+            # so the user isn't charged for a dev-mode no-op.
+            _refund_if_debited()
             jobs.update_phase(job_id, 4, "done")
             jobs.mark_done(job_id, ai_styled=False)
             jobs.clear_meta(job_id)
@@ -1178,7 +1262,6 @@ async def _run_phase4_only(
                 output_dir / f"base_video_{v}.mp4",
                 fal_prompt,
                 output_dir / f"final_video_{v}.mp4",
-                model_tier=model_tier,
             )
             for v in variants
             if (output_dir / f"base_video_{v}.mp4").exists()
@@ -1232,7 +1315,6 @@ async def _run_phase4_only(
                     variant=variant,
                     metadata={
                         "style_prompt": style_prompt,
-                        "model_tier": model_tier,
                         "source_id": source_id,
                         "autosaved": True,
                     },
@@ -1254,6 +1336,9 @@ async def _run_phase4_only(
         jobs.clear_meta(job_id)
 
     except Exception as exc:
+        # Phase 4 failed; return the reserved credits so the user isn't
+        # charged for an unusable render.
+        _refund_if_debited()
         jobs.mark_error(job_id, 4, str(exc))
         jobs.clear_meta(job_id)
 
@@ -1274,7 +1359,6 @@ async def _run_pipeline(
     orbit_mode: str = "horizontal",
     orbit_direction: int = 1,
     orbit_easing: list[float] | None = None,
-    model_tier: str = "premium",
     backdrop_color: str = "#000000",
 ) -> None:
     _variants = variants_to_render or list(VARIANT_NAMES)
@@ -1314,7 +1398,6 @@ async def _run_pipeline(
 
         variant_vecs = {"x": x_vecs, "y": y_vecs, "z": z_vecs}
         for variant in _variants:
-            print(f"[Phase 2] Rendering {variant}-axis variant...")
             renderer.render_video_frames(
                 meshes, variant_vecs[variant],
                 output_dir=output_dir / f"video_frames_{variant}",
@@ -1355,9 +1438,6 @@ async def _run_pipeline(
             if overrides:
                 rows = overrides.get("rows") or rows
                 style_prompt = overrides.get("style_prompt", style_prompt)
-                override_tier = overrides.get("model_tier")
-                if override_tier in ("standard", "high_quality", "premium"):
-                    model_tier = override_tier
 
             selected = jobs.get_approval_variants(job_id)
 
@@ -1365,6 +1445,12 @@ async def _run_pipeline(
         if not fal_key:
             import logging
             logging.warning("FAL_KEY not set; skipping Phase 4 Kling edit")
+            # No real render happened → refund the debit from /approve.
+            _skip_meta = jobs.get_meta(job_id)
+            _skip_amount = int(_skip_meta.get("credits_debited") or 0)
+            _skip_user = _skip_meta.get("credited_user_id")
+            if _skip_amount > 0 and _skip_user:
+                profile_store.refund_credits(_skip_user, _skip_amount)
             jobs.update_phase(job_id, 4, "done")
             jobs.mark_done(job_id, ai_styled=False)
             return
@@ -1385,7 +1471,7 @@ async def _run_pipeline(
             final_path = output_dir / f"final_video_{variant}.mp4"
             if base_path.exists():
                 style_tasks.append(
-                    editor.edit(base_path, fal_prompt, final_path, model_tier=model_tier)
+                    editor.edit(base_path, fal_prompt, final_path)
                 )
 
         if style_tasks:
@@ -1409,7 +1495,6 @@ async def _run_pipeline(
                     variant=variant,
                     metadata={
                         "style_prompt": style_prompt,
-                        "model_tier": model_tier,
                         "autosaved": True,
                     },
                 )
@@ -1432,7 +1517,20 @@ async def _run_pipeline(
         jobs.clear_meta(job_id)
 
     except Exception as exc:
+        # On any pipeline failure, refund the credits debited by /approve
+        # (metadata is a no-op if approval never ran, e.g. phase 1–3 crash).
+        _err_meta = jobs.get_meta(job_id)
+        _err_amount = int(_err_meta.get("credits_debited") or 0)
+        _err_user = _err_meta.get("credited_user_id")
+        if _err_amount > 0 and _err_user:
+            profile_store.refund_credits(_err_user, _err_amount)
         current_job = jobs.get_job(job_id)
         phase = current_job.current_phase if current_job else 1
         jobs.mark_error(job_id, phase, str(exc))
         jobs.clear_meta(job_id)
+
+
+# Attach the auth-gated router last, after every @protected.* decorator has
+# registered its route. Done at module scope so the routes are live as soon
+# as uvicorn imports backend.main.
+app.include_router(protected)

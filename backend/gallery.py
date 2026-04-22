@@ -56,6 +56,7 @@ class GalleryStore:
 
     def _initialise(self) -> None:
         with self._connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
 
     # -- Writes ----------------------------------------------------------

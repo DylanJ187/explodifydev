@@ -190,7 +190,6 @@ def list_pending_gallery() -> list[dict]:
             "title": meta.get("pending_title") or "Styled render",
             "thumbnail_path": meta.get("source_thumbnail_path"),
             "variant": meta.get("pending_variant"),
-            "model_tier": meta.get("model_tier"),
             "started_at": started,
             "eta_seconds": eta or None,
             "remaining_seconds": remaining,

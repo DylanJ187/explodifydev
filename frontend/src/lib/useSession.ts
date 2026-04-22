@@ -7,21 +7,11 @@ export interface SessionState {
   loading: boolean
 }
 
-const DEV_BYPASS = import.meta.env.VITE_DEV_BYPASS_AUTH === 'true'
-const FAKE_SESSION = {
-  access_token: 'dev-bypass',
-  refresh_token: 'dev-bypass',
-  expires_in: 3600,
-  token_type: 'bearer',
-  user: { id: 'dev', email: 'dev@explodify.local' },
-} as unknown as Session
-
 export function useSession(): SessionState {
-  const [session, setSession] = useState<Session | null>(DEV_BYPASS ? FAKE_SESSION : null)
-  const [loading, setLoading] = useState(!DEV_BYPASS)
+  const [session, setSession] = useState<Session | null>(null)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (DEV_BYPASS) return
     let cancelled = false
 
     supabase.auth.getSession().then(({ data }) => {

@@ -1,5 +1,7 @@
 // frontend/src/api/client.ts
 
+import { authFetch } from './authFetch'
+
 export interface PhaseStatus {
   [phase: number]: 'pending' | 'running' | 'done' | 'error'
 }
@@ -25,7 +27,6 @@ export interface PendingRender {
   title: string
   thumbnail_path: string | null
   variant: string | null
-  model_tier: ModelTier | null
   started_at: number
   eta_seconds: number | null
   remaining_seconds: number | null
@@ -54,7 +55,7 @@ export interface PreviewResult {
 export async function getPreviewImages(file: File): Promise<PreviewResult> {
   const form = new FormData()
   form.append('file', file)
-  const resp = await fetch('/preview', { method: 'POST', body: form })
+  const resp = await authFetch('/preview', { method: 'POST', body: form })
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error(detail.detail ?? resp.statusText)
@@ -67,18 +68,20 @@ interface Row {
   material: string
 }
 
-export type ModelTier = 'standard' | 'high_quality' | 'premium'
+// Single render engine (Kling o1 v2v). See pricing-model.md "Render Engine"
+// for why there is no tier selector. Credit cost is constant.
+export const CREDITS_PER_RENDER = 10
 
-export const MODEL_TIER_CREDITS: Record<ModelTier, number> = {
-  standard: 5,
-  high_quality: 15,
-  premium: 30,
+export interface CreditsStatus {
+  balance: number
+  per_render: number
 }
 
-export const MODEL_TIER_LABELS: Record<ModelTier, string> = {
-  standard: 'Standard Quality',
-  high_quality: 'High Quality',
-  premium: 'Maximum Quality',
+/** Fetch the authenticated user's current credit balance. */
+export async function getCredits(): Promise<CreditsStatus> {
+  const resp = await authFetch('/account/credits')
+  if (!resp.ok) throw new Error(`Credits load failed: ${resp.statusText}`)
+  return resp.json()
 }
 
 export type GalleryKind = 'base' | 'styled' | 'stitched' | 'loop'
@@ -112,7 +115,6 @@ export async function createJob(
     orbitDirection?: 1 | -1
     orbitEasingCurve?: number[]
     variantsToRender?: VariantName[]
-    modelTier?: ModelTier
     backdropColor?: string
   },
 ): Promise<string> {
@@ -139,21 +141,18 @@ export async function createJob(
   if (options.variantsToRender) {
     form.append('variants_to_render', options.variantsToRender.join(','))
   }
-  if (options.modelTier) {
-    form.append('model_tier', options.modelTier)
-  }
   if (options.backdropColor) {
     form.append('backdrop_color', options.backdropColor)
   }
 
-  const resp = await fetch('/jobs', { method: 'POST', body: form })
+  const resp = await authFetch('/jobs', { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Job creation failed: ${resp.statusText}`)
   const data = await resp.json()
   return data.job_id as string
 }
 
 export async function getJobStatus(jobId: string): Promise<JobStatus> {
-  const resp = await fetch(`/jobs/${jobId}`)
+  const resp = await authFetch(`/jobs/${jobId}`)
   if (!resp.ok) throw new Error(`Status check failed: ${resp.statusText}`)
   return resp.json()
 }
@@ -164,17 +163,13 @@ export async function restyleJob(
     rows: Row[]
     stylePrompt: string
     selectedVariants: VariantName[]
-    modelTier?: ModelTier
   },
 ): Promise<string> {
   const form = new FormData()
   form.append('component_rows', JSON.stringify(options.rows))
   form.append('style_prompt', options.stylePrompt)
   form.append('selected_variants', options.selectedVariants.join(','))
-  if (options.modelTier) {
-    form.append('model_tier', options.modelTier)
-  }
-  const resp = await fetch(`/jobs/${sourceJobId}/restyle`, { method: 'POST', body: form })
+  const resp = await authFetch(`/jobs/${sourceJobId}/restyle`, { method: 'POST', body: form })
   if (!resp.ok) {
     const detail = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error(detail.detail ?? resp.statusText)
@@ -193,7 +188,7 @@ export async function fetchPreviewFrame(
   const form = new FormData()
   form.append('preview_id', options.previewId)
   form.append('camera_direction', JSON.stringify(options.cameraDirection))
-  const resp = await fetch('/preview/frame', { method: 'POST', body: form, signal })
+  const resp = await authFetch('/preview/frame', { method: 'POST', body: form, signal })
   if (!resp.ok) throw new Error(`Preview frame render failed: ${resp.statusText}`)
   const blob = await resp.blob()
   return URL.createObjectURL(blob)
@@ -203,21 +198,21 @@ export async function fetchPreviewFrame(
 
 export async function listGallery(kind?: GalleryKind): Promise<GalleryItem[]> {
   const url = kind ? `/gallery?kind=${encodeURIComponent(kind)}` : '/gallery'
-  const resp = await fetch(url)
+  const resp = await authFetch(url)
   if (!resp.ok) throw new Error(`Gallery list failed: ${resp.statusText}`)
   const data = await resp.json()
   return (data.items ?? []) as GalleryItem[]
 }
 
 export async function deleteGalleryItem(itemId: string): Promise<void> {
-  const resp = await fetch(`/gallery/${itemId}`, { method: 'DELETE' })
+  const resp = await authFetch(`/gallery/${itemId}`, { method: 'DELETE' })
   if (!resp.ok) throw new Error(`Gallery delete failed: ${resp.statusText}`)
 }
 
 export async function renameGalleryItem(itemId: string, title: string): Promise<void> {
   const form = new FormData()
   form.append('title', title)
-  const resp = await fetch(`/gallery/${itemId}/rename`, { method: 'POST', body: form })
+  const resp = await authFetch(`/gallery/${itemId}/rename`, { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Gallery rename failed: ${resp.statusText}`)
 }
 
@@ -228,7 +223,7 @@ export async function stitchGalleryItems(
   const form = new FormData()
   form.append('item_ids', JSON.stringify(itemIds))
   if (title) form.append('title', title)
-  const resp = await fetch('/stitch', { method: 'POST', body: form })
+  const resp = await authFetch('/stitch', { method: 'POST', body: form })
   if (!resp.ok) {
     await throwGalleryError(resp)
   }
@@ -241,7 +236,7 @@ export async function createGalleryLoop(
 ): Promise<GalleryItem> {
   const form = new FormData()
   if (title) form.append('title', title)
-  const resp = await fetch(`/gallery/${itemId}/loop`, { method: 'POST', body: form })
+  const resp = await authFetch(`/gallery/${itemId}/loop`, { method: 'POST', body: form })
   if (!resp.ok) {
     await throwGalleryError(resp)
   }
@@ -286,7 +281,7 @@ async function throwGalleryError(resp: Response): Promise<never> {
 }
 
 export async function getGalleryStats(): Promise<GalleryStats> {
-  const resp = await fetch('/gallery/stats')
+  const resp = await authFetch('/gallery/stats')
   if (!resp.ok) throw new Error(`Gallery stats failed: ${resp.statusText}`)
   return resp.json()
 }
@@ -302,7 +297,7 @@ export async function saveToGallery(options: {
   form.append('variant', options.variant)
   form.append('kind', options.kind)
   if (options.title) form.append('title', options.title)
-  const resp = await fetch('/gallery', { method: 'POST', body: form })
+  const resp = await authFetch('/gallery', { method: 'POST', body: form })
   if (!resp.ok) await throwGalleryError(resp)
   return resp.json()
 }
@@ -320,7 +315,7 @@ export async function replaceGalleryItem(options: {
   form.append('variant', options.variant)
   form.append('kind', options.kind)
   if (options.title) form.append('title', options.title)
-  const resp = await fetch('/gallery/replace', { method: 'POST', body: form })
+  const resp = await authFetch('/gallery/replace', { method: 'POST', body: form })
   if (!resp.ok) await throwGalleryError(resp)
   return resp.json()
 }
@@ -331,7 +326,7 @@ export async function toggleFavorite(
 ): Promise<GalleryItem> {
   const form = new FormData()
   form.append('favorite', String(favorite))
-  const resp = await fetch(`/gallery/${itemId}/favorite`, { method: 'POST', body: form })
+  const resp = await authFetch(`/gallery/${itemId}/favorite`, { method: 'POST', body: form })
   if (!resp.ok) throw new Error(`Favorite toggle failed: ${resp.statusText}`)
   return resp.json()
 }
@@ -345,27 +340,23 @@ export async function styleGalleryItem(
   options: {
     rows: Row[]
     stylePrompt: string
-    modelTier?: ModelTier
     replaceId?: string
   },
 ): Promise<{ jobId: string; etaSeconds: number | null }> {
   const form = new FormData()
   form.append('component_rows', JSON.stringify(options.rows))
   form.append('style_prompt', options.stylePrompt)
-  if (options.modelTier) {
-    form.append('model_tier', options.modelTier)
-  }
   if (options.replaceId) {
     form.append('replace_id', options.replaceId)
   }
-  const resp = await fetch(`/gallery/${itemId}/style`, { method: 'POST', body: form })
+  const resp = await authFetch(`/gallery/${itemId}/style`, { method: 'POST', body: form })
   if (!resp.ok) await throwGalleryError(resp)
   const data = await resp.json()
   return { jobId: data.job_id as string, etaSeconds: data.eta_seconds ?? null }
 }
 
 export async function listPendingRenders(): Promise<PendingRender[]> {
-  const resp = await fetch('/gallery/pending')
+  const resp = await authFetch('/gallery/pending')
   if (!resp.ok) throw new Error(`Pending renders failed: ${resp.statusText}`)
   const data = await resp.json()
   return (data.items ?? []) as PendingRender[]
@@ -405,7 +396,7 @@ export interface AccountUpdate {
 }
 
 export async function getAccount(): Promise<AccountProfile> {
-  const resp = await fetch('/account/me')
+  const resp = await authFetch('/account/me')
   if (!resp.ok) throw new Error(`Account load failed: ${resp.statusText}`)
   return resp.json()
 }
@@ -422,7 +413,7 @@ export async function updateAccount(fields: AccountUpdate): Promise<AccountProfi
   if (fields.preferences     !== undefined) form.append('preferences',     JSON.stringify(fields.preferences))
   if (fields.avatar)                        form.append('avatar',          fields.avatar)
 
-  const resp = await fetch('/account', { method: 'POST', body: form })
+  const resp = await authFetch('/account', { method: 'POST', body: form })
   if (!resp.ok) {
     const body = await resp.json().catch(() => null)
     throw new Error(body?.detail ?? resp.statusText)
@@ -431,7 +422,7 @@ export async function updateAccount(fields: AccountUpdate): Promise<AccountProfi
 }
 
 export async function signOutEverywhere(): Promise<void> {
-  const resp = await fetch('/account/signout-all', { method: 'POST' })
+  const resp = await authFetch('/account/signout-all', { method: 'POST' })
   if (!resp.ok) throw new Error(`Sign out failed: ${resp.statusText}`)
 }
 
@@ -447,7 +438,6 @@ export async function approvePhase4(
   styleOpts?: {
     rows: Row[]
     stylePrompt: string
-    modelTier?: ModelTier
     replaceId?: string
   },
 ): Promise<{ etaSeconds: number | null }> {
@@ -456,14 +446,11 @@ export async function approvePhase4(
   if (styleOpts) {
     form.append('component_rows', JSON.stringify(styleOpts.rows))
     form.append('style_prompt', styleOpts.stylePrompt)
-    if (styleOpts.modelTier) {
-      form.append('model_tier', styleOpts.modelTier)
-    }
     if (styleOpts.replaceId) {
       form.append('replace_id', styleOpts.replaceId)
     }
   }
-  const resp = await fetch(`/jobs/${jobId}/approve`, { method: 'POST', body: form })
+  const resp = await authFetch(`/jobs/${jobId}/approve`, { method: 'POST', body: form })
   if (!resp.ok) await throwGalleryError(resp)
   const data = await resp.json().catch(() => ({ eta_seconds: null }))
   return { etaSeconds: data.eta_seconds ?? null }

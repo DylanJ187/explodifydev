@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "explodify"
+version = "0.1.0"
+description = "Explodify — generative exploded-view videos from 3D assemblies."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Explodify Team" },
+]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.5",
+    "python-dotenv>=1.0",
+    "python-jose[cryptography]==3.5.0",
+    "httpx>=0.24",
+    "pillow>=10",
+    "numpy>=1.26",
+    "trimesh>=4.4",
+    "pyrender>=0.1.45",
+    "fal-client>=0.5",
+    "typer>=0.12",
+    "rich>=13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio",
+    "pytest-cov>=5",
+    "cryptography>=41",
+    "httpx>=0.24",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend", "pipeline"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+asyncio_mode = "auto"

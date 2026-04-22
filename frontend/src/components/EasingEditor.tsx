@@ -16,20 +16,17 @@ interface Preset {
 
 const PRESETS: Preset[] = [
   { id: 'linear',    label: 'Linear',    samples: [0.00, 0.25, 0.50, 0.75, 1.00] },
-  { id: 'cinematic', label: 'Cinematic', samples: [0.00, 0.08, 0.50, 0.92, 1.00] },
-  { id: 'snap',      label: 'Snap',      samples: [0.00, 0.70, 0.95, 0.99, 1.00] },
+  { id: 'cinematic', label: 'Cinematic', samples: [0.00, 0.70, 0.95, 0.99, 1.00] },
   { id: 'ease-in',   label: 'Ease In',   samples: [0.00, 0.05, 0.20, 0.55, 1.00] },
   { id: 'surge',     label: 'Surge',     samples: [0.00, 0.40, 0.60, 0.75, 1.00] },
 ]
 
 // Orbit-specific presets — same semantics (% orbit completed at each time point).
-// Cinematic is a smooth S-curve — recommended default for ad-quality renders.
 export const ORBIT_EASING_PRESETS: Preset[] = [
   { id: 'linear',    label: 'Linear',    samples: [0.00, 0.25, 0.50, 0.75, 1.00] },
-  { id: 'cinematic', label: 'Cinematic', samples: [0.00, 0.15, 0.50, 0.85, 1.00] },
+  { id: 'cinematic', label: 'Cinematic', samples: [0.00, 0.60, 0.90, 0.98, 1.00] },
   { id: 'ease-out',  label: 'Ease Out',  samples: [0.00, 0.40, 0.70, 0.90, 1.00] },
   { id: 'ease-in',   label: 'Ease In',   samples: [0.00, 0.10, 0.30, 0.60, 1.00] },
-  { id: 'snap',      label: 'Snap',      samples: [0.00, 0.60, 0.90, 0.98, 1.00] },
 ]
 
 export const DEFAULT_EQ_SAMPLES: number[] = [...PRESETS[0].samples]

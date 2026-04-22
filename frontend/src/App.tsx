@@ -8,7 +8,6 @@ import { EasingEditor, ORBIT_EASING_PRESETS, CINEMATIC_EXPLOSION_SAMPLES, CINEMA
 import type { OrbitMode, OrbitDirection } from './components/orientation/createViewer'
 import { MeshViewer } from './components/MeshViewer'
 import type { MeshViewerHandle } from './components/MeshViewer'
-import { IdleOutput } from './components/IdleOutput'
 import { LoadingOutput } from './components/LoadingOutput'
 import { VideoOutput } from './components/VideoOutput'
 import { CustomVideoPlayer } from './components/CustomVideoPlayer'
@@ -21,11 +20,10 @@ import { Gallery } from './components/Gallery'
 import { Profile } from './components/Profile'
 import { JobQueueProvider, useJobQueue } from './contexts/JobQueueContext'
 import { JobQueueIndicator } from './components/JobQueueIndicator'
-import { getPreviewImages, createJob, getJobStatus, approvePhase4, restyleJob, galleryVideoUrl, styleGalleryItem, GalleryFullError } from './api/client'
-import type { JobStatus, ModelTier, PreviewResult, VariantName } from './api/client'
+import { getPreviewImages, createJob, getJobStatus, approvePhase4, restyleJob, galleryVideoUrl, styleGalleryItem, getCredits, CREDITS_PER_RENDER, GalleryFullError } from './api/client'
+import type { JobStatus, PreviewResult, VariantName } from './api/client'
 import { ConfirmCreditsModal, shouldSkipConfirm, setSkipConfirm } from './components/ConfirmCreditsModal'
 import { ProceedToStyleButton } from './components/ProceedToStyleButton'
-import { ModelSelector } from './components/ModelSelector'
 import { PricingModal } from './components/shell/PricingModal'
 import { ReplaceGalleryModal } from './components/ReplaceGalleryModal'
 import RequireAuth from './routes/RequireAuth'
@@ -35,6 +33,7 @@ import LoginPage from './pages/LoginPage'
 import AuthCallback from './pages/AuthCallback'
 import LandingPage from './pages/LandingPage'
 import { loadStudio, saveStudio, clearStudio, isPersistableState } from './lib/studioStorage'
+import { useSession } from './lib/useSession'
 
 type AppState = 'idle' | 'uploading' | 'orientation' | 'processing' | 'awaiting_approval' | 'styling' | 'done' | 'error'
 
@@ -92,6 +91,10 @@ function AppInner() {
   const tab: NavTab = useActiveTab()
   const navigate = useNavigate()
   const location = useLocation()
+  // RequireAuth gates this component on a resolved, non-null session, so
+  // `session.user.id` is available synchronously on first render.
+  const { session } = useSession()
+  const userId = session?.user.id ?? null
   const routeState = location.state as {
     initialPrompt?: string
     styleFromGallery?: { galleryId: string; variant: VariantName; title: string }
@@ -101,7 +104,8 @@ function AppInner() {
 
   // Rehydrate once on mount. Stored snapshot only ever resurrects settled
   // states; transient ones (uploading/error) never wrote in the first place.
-  const snapshot = useMemo(() => loadStudio(), [])
+  // Keyed by userId so snapshots never cross identities.
+  const snapshot = useMemo(() => loadStudio(userId), [userId])
 
   const [state, setState] = useState<AppState>(snapshot?.state ?? 'idle')
   const [jobId, setJobId] = useState<string | null>(snapshot?.jobId ?? null)
@@ -119,7 +123,6 @@ function AppInner() {
   const [orbitMode, setOrbitMode] = useState<OrbitMode>(snapshot?.orbitMode ?? 'horizontal')
   const [orbitDirection, setOrbitDirection] = useState<OrbitDirection>(snapshot?.orbitDirection ?? 1)
   const [orbitEasingCurve, setOrbitEasingCurve] = useState<number[]>(snapshot?.orbitEasingCurve ?? DEFAULT_ORBIT_EASING)
-  const [modelTier, setModelTier] = useState<ModelTier>(snapshot?.modelTier ?? 'premium')
   const [backdropColor, setBackdropColor] = useState<string>(snapshot?.backdropColor ?? '#000000')
   const [pendingApprove, setPendingApprove] = useState<null | { variants: VariantName[] }>(null)
   const [replaceModal, setReplaceModal] = useState<null | {
@@ -131,8 +134,25 @@ function AppInner() {
     galleryId: string
     variant: VariantName
   }>(snapshot?.fromGalleryContext ?? null)
-  const creditsRemaining = 30
-  const creditsTotal = 30
+  // DB-backed balance. `creditsTotal` is only used for the HUD progress bar —
+  // we default to CREDITS_PER_RENDER so a brand-new account shows "full". The
+  // ring clamps to 100 so that top-up purchases that push balance past the
+  // nominal total never overflow the bar visually.
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null)
+  const creditsRemaining = creditsBalance ?? CREDITS_PER_RENDER
+  const creditsTotal = Math.max(CREDITS_PER_RENDER, creditsRemaining)
+  const refreshCredits = async () => {
+    try {
+      const next = await getCredits()
+      setCreditsBalance(next.balance)
+    } catch {
+      // Non-fatal — the HUD falls back to its last known balance, and the
+      // server is always the arbiter before a render goes through.
+    }
+  }
+  useEffect(() => {
+    void refreshCredits()
+  }, [])
   const { enqueue: enqueueJob } = useJobQueue()
   const [renderedSettings, setRenderedSettings] = useState<{ explodeScalar: number; orbitRangeDeg: number; cameraZoom: number; orbitMode: OrbitMode; orbitDirection: OrbitDirection } | null>(snapshot?.renderedSettings ?? null)
   const [restyleStack, setRestyleStack] = useState<RestyleEntry[]>(snapshot?.restyleStack ?? [])
@@ -221,7 +241,6 @@ function AppInner() {
         orbitDirection,
         orbitEasingCurve,
         variantsToRender,
-        modelTier,
         backdropColor,
       })
       setJobId(id)
@@ -256,10 +275,12 @@ function AppInner() {
         } else if (status.status === 'done') {
           setState('done')
           clearInterval(pollRef.current!)
+          void refreshCredits()
         } else if (status.status === 'error') {
           setErrorMsg(status.error ?? 'Pipeline error')
           setState('error')
           clearInterval(pollRef.current!)
+          void refreshCredits()
         }
       } catch {
         // keep polling on transient network errors
@@ -276,7 +297,6 @@ function AppInner() {
         rows: opts.rows,
         stylePrompt: opts.prompt,
         selectedVariants: variants,
-        modelTier,
       })
       setRestyleStack(prev => [
         { jobId: newJobId, status: 'generating', variants, aiStyled: false },
@@ -286,6 +306,7 @@ function AppInner() {
         newJobId,
         `Restyle · ${variants.map(v => v.toUpperCase()).join('+')}`,
       )
+      void refreshCredits()
     } catch {
       // silently fail — the skeleton will not appear
     }
@@ -324,7 +345,6 @@ function AppInner() {
         const { jobId: newJobId } = await styleGalleryItem(fromGalleryContext.galleryId, {
           rows: styleOptions.rows,
           stylePrompt: styleOptions.prompt,
-          modelTier,
           replaceId,
         })
         setJobId(newJobId)
@@ -340,11 +360,11 @@ function AppInner() {
         await approvePhase4(jobId, variants, {
           rows: styleOptions.rows,
           stylePrompt: styleOptions.prompt,
-          modelTier,
           replaceId,
         })
         setState('styling')
       }
+      void refreshCredits()
     } catch (err) {
       if (err instanceof GalleryFullError) {
         setReplaceModal({ variants, savedCount: err.savedCount, cap: err.cap })
@@ -378,7 +398,7 @@ function AppInner() {
     setFromGalleryContext(null)
     lastSubmittedDirection.current = [0.3, 0.3, 1.0]
     preErrorSnapshotRef.current = null
-    clearStudio()
+    clearStudio(userId)
   }
 
   // Try-again: restore the last actionable step the user was on. Falls back to
@@ -400,7 +420,7 @@ function AppInner() {
   useEffect(() => {
     if (!isPersistableState(state)) return
     const t = window.setTimeout(() => {
-      saveStudio({
+      saveStudio(userId, {
         state,
         jobId,
         preview,
@@ -414,7 +434,6 @@ function AppInner() {
         orbitMode,
         orbitDirection,
         orbitEasingCurve,
-        modelTier,
         backdropColor,
         cameraDirection,
         renderedSettings,
@@ -424,10 +443,11 @@ function AppInner() {
     }, 200)
     return () => window.clearTimeout(t)
   }, [
+    userId,
     state, jobId, preview, uploadedFile, uploadedFileName,
     orbitRangeDeg, explodeScalar, cameraZoom, styleOptions,
     selectedVariant, easingCurve, orbitMode, orbitDirection,
-    orbitEasingCurve, modelTier, backdropColor, cameraDirection,
+    orbitEasingCurve, backdropColor, cameraDirection,
     renderedSettings, restyleStack, fromGalleryContext,
   ])
 
@@ -491,6 +511,34 @@ function AppInner() {
     )
   }
 
+  // Pre-orientation states are full-width — the CAD drag-drop and the
+  // subsequent "Reading geometry" screen both get the whole viewport so the
+  // user isn't staring at a sidebar of inert controls before there's anything
+  // to control. The left panel unlocks from 'orientation' onwards.
+  const isIntroState = state === 'idle' || state === 'uploading'
+
+  if (isIntroState) {
+    return (
+      <div className="app-shell">
+        {topbar}
+        <div className="app-layout app-layout--single">
+          <main className="right-panel right-panel--intro">
+            {state === 'idle' && (
+              <div className="studio-intro animate-fade-in">
+                <UploadZone onUpload={handleUpload} loading={false} />
+              </div>
+            )}
+            {state === 'uploading' && (
+              <div className="studio-intro studio-intro--loading animate-fade-in">
+                <LoadingOutput phase="orientation" jobStatus={null} />
+              </div>
+            )}
+          </main>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app-shell">
       {topbar}
@@ -500,16 +548,6 @@ function AppInner() {
       <aside className="left-panel">
 
         <div className="left-scroll">
-
-          {(state === 'idle' || state === 'uploading') && (
-            <section className="panel-section animate-fade-in">
-              <div className="section-label">Input File</div>
-              <UploadZone
-                onUpload={handleUpload}
-                loading={state === 'uploading'}
-              />
-            </section>
-          )}
 
           {showControls && (
             <>
@@ -573,15 +611,6 @@ function AppInner() {
               {state === 'awaiting_approval' && (
                 <>
                   <section className="panel-section animate-fade-in">
-                    <div className="section-label">Render Quality</div>
-                    <ModelSelector
-                      modelTier={modelTier}
-                      onModelTierChange={setModelTier}
-                      creditsRemaining={creditsRemaining}
-                    />
-                  </section>
-
-                  <section className="panel-section animate-fade-in">
                     {settingsChanged ? (
                       <>
                         <div className="settings-changed-indicator">
@@ -643,12 +672,6 @@ function AppInner() {
 
       {/* Right panel */}
       <main className="right-panel">
-        {state === 'idle' && <IdleOutput />}
-
-        {state === 'uploading' && (
-          <LoadingOutput phase="orientation" jobStatus={null} />
-        )}
-
         {state === 'orientation' && preview && (
           <MeshViewer
             ref={meshViewerRef}
@@ -681,7 +704,6 @@ function AppInner() {
           <DualApprovalGate
             jobId={jobId}
             selectedVariant={selectedVariant}
-            modelTier={modelTier}
             creditsRemaining={creditsRemaining}
             videoSrc={fromGalleryContext ? galleryVideoUrl(fromGalleryContext.galleryId) : undefined}
             hideAdjust={!!fromGalleryContext}
@@ -721,7 +743,6 @@ function AppInner() {
       </div>
       <ConfirmCreditsModal
         open={pendingApprove !== null}
-        modelTier={modelTier}
         creditsRemaining={creditsRemaining}
         onCancel={() => setPendingApprove(null)}
         onConfirm={(dontAskAgain) => {
@@ -751,7 +772,6 @@ function AppInner() {
 function DualApprovalGate({
   jobId,
   selectedVariant,
-  modelTier,
   creditsRemaining,
   videoSrc,
   hideAdjust,
@@ -761,7 +781,6 @@ function DualApprovalGate({
 }: {
   jobId: string
   selectedVariant: VariantName
-  modelTier: ModelTier
   creditsRemaining: number
   videoSrc?: string
   hideAdjust?: boolean
@@ -807,7 +826,6 @@ function DualApprovalGate({
       <div className="review-actions">
         <div className="review-actions-left">
           <ProceedToStyleButton
-            modelTier={modelTier}
             creditsRemaining={creditsRemaining}
             onProceed={() => onApprove([selectedVariant])}
           />

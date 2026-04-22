@@ -1,5 +1,6 @@
 // frontend/src/components/CustomVideoPlayer.tsx
 import { useEffect, useRef, useState } from 'react'
+import { useAuthedBlobUrl } from '../api/useAuthedBlobUrl'
 
 interface Props {
   src: string
@@ -10,6 +11,14 @@ interface Props {
   loop?: boolean
   watermark?: string
   onUpgradeClick?: () => void
+}
+
+// Backend media paths ('/gallery/...', '/jobs/...') require a Bearer token
+// that a native <video> element can't attach. For paths starting with '/'
+// we resolve via authFetch → blob URL. External or already-blob URLs pass
+// through untouched so callers can still embed raw sources.
+function needsAuth(src: string): boolean {
+  return src.startsWith('/') && !src.startsWith('//')
 }
 
 function fmt(t: number): string {
@@ -40,6 +49,11 @@ export function CustomVideoPlayer({
   const [hovering, setHovering] = useState(false)
   const [upgradePulse, setUpgradePulse] = useState(false)
   const [isFullscreen, setIsFullscreen] = useState(false)
+
+  const authedSrc = useAuthedBlobUrl(needsAuth(src) ? src : null)
+  const authedPoster = useAuthedBlobUrl(posterSrc && needsAuth(posterSrc) ? posterSrc : null)
+  const resolvedSrc = needsAuth(src) ? authedSrc : src
+  const resolvedPoster = posterSrc ? (needsAuth(posterSrc) ? authedPoster : posterSrc) : undefined
 
   useEffect(() => {
     const v = videoRef.current
@@ -144,8 +158,8 @@ export function CustomVideoPlayer({
     >
       <video
         ref={videoRef}
-        src={src}
-        poster={posterSrc}
+        src={resolvedSrc ?? undefined}
+        poster={resolvedPoster}
         autoPlay={autoPlay}
         loop={loop}
         muted={muted}
@@ -242,7 +256,7 @@ export function CustomVideoPlayer({
           {canDownload ? (
             <a
               className="cvp-btn cvp-btn--primary"
-              href={src}
+              href={resolvedSrc ?? '#'}
               download={downloadName}
               aria-label="Download"
             >

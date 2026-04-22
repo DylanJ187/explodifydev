@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import type { ExplosionAxes, VariantName, FaceName } from '../api/client'
+import { authFetch } from '../api/authFetch'
 import { OrientationViewer } from './orientation/OrientationViewer'
 import type { Orientation, Vec3, OrbitMode, OrbitDirection } from './orientation/createViewer'
 import { PreviewFrame } from './PreviewFrame'
@@ -77,7 +78,7 @@ export const MeshViewer = forwardRef<MeshViewerHandle, Props>(function MeshViewe
     }
     setViewerFile(null)
     let cancelled = false
-    fetch(`/preview/${previewId}/mesh.glb`)
+    authFetch(`/preview/${previewId}/mesh.glb`)
       .then(r => {
         if (!r.ok) throw new Error(`${r.status}`)
         return r.blob()

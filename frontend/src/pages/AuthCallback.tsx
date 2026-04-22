@@ -2,27 +2,59 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 
+// With `detectSessionInUrl: true` + `flowType: 'pkce'` in supabase.ts, the SDK
+// performs the `?code=` → session exchange itself during client init
+// (gotrue-js `_initialize` → `_getSessionFromURL`). The PKCE code verifier is
+// single-use: if we also call `exchangeCodeForSession` from here we race the
+// SDK and whichever call loses throws "PKCE code verifier not found in
+// storage". So we do not call it — we just wait for the session to appear via
+// `onAuthStateChange` (fallback: `getSession()` if init already finished
+// before we mounted) and then redirect.
+const SESSION_WAIT_MS = 8000
+
 export default function AuthCallback() {
   const navigate = useNavigate()
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   useEffect(() => {
-    let cancelled = false
+    let settled = false
 
-    async function exchange() {
-      const { error } = await supabase.auth.exchangeCodeForSession(window.location.href)
-      if (cancelled) return
-      if (error) {
-        setErrorMsg(error.message)
-        return
+    const finish = (target: '/gallery' | null, message?: string) => {
+      if (settled) return
+      settled = true
+      if (target) {
+        navigate(target, { replace: true })
+      } else if (message) {
+        setErrorMsg(message)
       }
-      navigate('/gallery', { replace: true })
     }
 
-    exchange()
+    // Supabase redirects a failed magic-link to `?error=...&error_description=...`.
+    // Surface that immediately instead of waiting for the session timeout.
+    const url = new URL(window.location.href)
+    const urlError = url.searchParams.get('error_description') ?? url.searchParams.get('error')
+    if (urlError) {
+      finish(null, urlError)
+      return
+    }
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session && (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED')) {
+        finish('/gallery')
+      }
+    })
+
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) finish('/gallery')
+    })
+
+    const timer = window.setTimeout(() => {
+      finish(null, 'Sign-in timed out. The magic link may have expired — please request a new one.')
+    }, SESSION_WAIT_MS)
 
     return () => {
-      cancelled = true
+      sub.subscription.unsubscribe()
+      window.clearTimeout(timer)
     }
   }, [navigate])
 

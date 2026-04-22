@@ -6,6 +6,7 @@ import {
   type GalleryTier,
   avatarUrl,
   getAccount,
+  getCredits,
   getGalleryStats,
   signOutEverywhere,
   updateAccount,
@@ -30,7 +31,7 @@ interface RailItem {
 const RAIL: RailItem[] = [
   { id: 'general',       index: '01', label: 'General',            hint: 'Name & contact' },
   { id: 'plan',          index: '02', label: 'Plan & Credits',     hint: 'Tier, usage, top-ups' },
-  { id: 'defaults',      index: '03', label: 'Render Defaults',    hint: 'Axis, duration, engine' },
+  { id: 'defaults',      index: '03', label: 'Render Defaults',    hint: 'Axis, duration' },
   { id: 'notifications', index: '04', label: 'Notifications',      hint: 'Render & account alerts' },
   { id: 'privacy',       index: '05', label: 'Privacy & Security', hint: 'Data, sessions, deletion' },
 ]
@@ -42,11 +43,6 @@ const AXIS_OPTIONS: Array<{ value: 'x' | 'y' | 'z'; label: string }> = [
 ]
 
 const DURATION_OPTIONS = ['3s', '5s', '10s']
-const ENGINE_OPTIONS   = [
-  { value: 'standard', label: 'Standard',     sub: 'Kling 3.0' },
-  { value: 'high',     label: 'High Quality', sub: 'Kling 2.5 Pro' },
-  { value: 'premium',  label: 'Premium',      sub: 'Kling o1' },
-]
 
 type PrefsSection = Record<string, boolean | string>
 type Prefs = Record<string, PrefsSection>
@@ -64,7 +60,6 @@ const DEFAULT_PREFS: Prefs = {
   },
   defaults: {
     duration: '3s',
-    engine:   'standard',
   },
 }
 
@@ -88,6 +83,7 @@ export function Profile() {
   const [deleteOpen, setDeleteOpen]   = useState(false)
   const [avatarBust, setAvatarBust]   = useState<number>(0)
   const [savedFlash, setSavedFlash]   = useState<string | null>(null)
+  const [creditsBalance, setCreditsBalance] = useState<number | null>(null)
 
   // Local buffer for text fields so typing doesn't POST on every keystroke.
   const [buf, setBuf] = useState({
@@ -101,9 +97,10 @@ export function Profile() {
     let cancelled = false
     void (async () => {
       try {
-        const [p, stats] = await Promise.all([
+        const [p, stats, credits] = await Promise.all([
           getAccount(),
           getGalleryStats().catch(() => null),
+          getCredits().catch(() => null),
         ])
         if (cancelled) return
         setProfile(p)
@@ -116,6 +113,7 @@ export function Profile() {
         })
         if (p.avatar_path) setAvatarBust(Date.now())
         if (stats?.tier) setTier(stats.tier)
+        if (credits) setCreditsBalance(credits.balance)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -136,9 +134,8 @@ export function Profile() {
       setPrefs(mergePrefs(DEFAULT_PREFS, next.preferences))
       if (fields.avatar) setAvatarBust(Date.now())
       flash(successMsg)
-    } catch (err) {
+    } catch {
       flash('Save failed')
-      console.error(err)
     } finally {
       setSaving(false)
     }
@@ -187,10 +184,15 @@ export function Profile() {
     return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase()
   }, [buf.full_name, profile])
 
-  // Credits display (pulled from current tier until billing is wired up).
-  const TIER_CREDITS: Record<GalleryTier, number> = { free: 30, pro: 450, studio: 900 }
+  // Credit totals per tier come from pricing-model.md v8 (Standard is a
+  // one-time topup, so it shares the free-tier "seeded balance" display). The
+  // remaining balance is the DB-backed `credits_balance`, fetched once on
+  // mount above. Total is only used to render the progress bar — when the
+  // user has bought top-ups their balance may exceed the nominal total, so
+  // we clamp the displayed percentage at 100.
+  const TIER_CREDITS: Record<GalleryTier, number> = { free: 10, pro: 300, studio: 700 }
   const creditsTotal = TIER_CREDITS[tier]
-  const creditsRemaining = creditsTotal
+  const creditsRemaining = creditsBalance ?? creditsTotal
   const pct = Math.max(0, Math.min(100, (creditsRemaining / creditsTotal) * 100))
   const isSubscriber = tier === 'pro' || tier === 'studio'
 
@@ -395,25 +397,6 @@ export function Profile() {
                       {d}
                     </button>
                   ))}
-                </div>
-              </Field>
-
-              <Field label="Default engine" hint="Cost per render varies by tier" full>
-                <div className="settings-pref-grid">
-                  {ENGINE_OPTIONS.map(eng => {
-                    const active = prefs.defaults?.engine === eng.value
-                    return (
-                      <button
-                        key={eng.value}
-                        type="button"
-                        className={`settings-pref-card ${active ? 'is-active' : ''}`}
-                        onClick={() => setPref('defaults', 'engine', eng.value)}
-                      >
-                        <span className="settings-pref-card-label">{eng.label}</span>
-                        <span className="settings-pref-card-sub">{eng.sub}</span>
-                      </button>
-                    )
-                  })}
                 </div>
               </Field>
             </div>

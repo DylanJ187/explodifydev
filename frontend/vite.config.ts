@@ -26,6 +26,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      '/account': { target: 'http://localhost:8000', bypass: htmlBypass },
       '/jobs':    { target: 'http://localhost:8000', bypass: htmlBypass },
       '/preview': { target: 'http://localhost:8000', bypass: htmlBypass },
       '/health':  { target: 'http://localhost:8000', bypass: htmlBypass },

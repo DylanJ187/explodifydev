@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { galleryThumbnailUrl, listGallery } from '../api/client'
 import type { GalleryItem } from '../api/client'
+import { AuthedImg } from './AuthedImg'
 
 interface Props {
   open: boolean
@@ -79,7 +80,7 @@ export function ReplaceGalleryModal({ open, savedCount, cap, onCancel, onConfirm
               aria-pressed={selected === it.id}
             >
               {it.thumbnail_path
-                ? <img src={galleryThumbnailUrl(it.id)} alt="" loading="lazy" />
+                ? <AuthedImg src={galleryThumbnailUrl(it.id)} loading="lazy" />
                 : <div className="replace-card-empty" />}
               <div className="replace-card-meta">
                 <span className="replace-card-title" title={it.title}>{it.title}</span>

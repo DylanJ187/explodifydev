@@ -10,20 +10,18 @@ export interface PlanOffer {
   credits: number
   creditsCadence: string
   accent: 'amber' | 'teal'
-  bullets: { premium: number; hq: number; standard: number }
+  renders: number
 }
 
 export interface TopupPack {
-  id: 'starter' | 'standard'
+  id: 'standard'
   label: string
   tagline: string
   price: string
   cadence: string
   credits: number
   creditsCadence: string
-  premium: number
-  hq: number
-  standard: number
+  renders: number
 }
 
 export const UPGRADE_PLANS: PlanOffer[] = [
@@ -33,10 +31,10 @@ export const UPGRADE_PLANS: PlanOffer[] = [
     tagline: 'For freelancers & solo studios',
     price: '£29.99',
     cadence: '/mo',
-    credits: 450,
+    credits: 300,
     creditsCadence: 'credits / month',
     accent: 'amber',
-    bullets: { premium: 15, hq: 30, standard: 90 },
+    renders: 30,
   },
   {
     id: 'studio',
@@ -44,37 +42,23 @@ export const UPGRADE_PLANS: PlanOffer[] = [
     tagline: 'For agencies & production teams',
     price: '£49.99',
     cadence: '/mo',
-    credits: 900,
+    credits: 700,
     creditsCadence: 'credits / month',
     accent: 'teal',
-    bullets: { premium: 30, hq: 60, standard: 180 },
+    renders: 70,
   },
 ]
 
 export const TOPUP_PACKS: TopupPack[] = [
-  {
-    id: 'starter',
-    label: 'Starter pack',
-    tagline: 'Smallest pack',
-    price: '£6.99',
-    cadence: 'one-time',
-    credits: 60,
-    creditsCadence: 'credits · no expiry',
-    premium: 2,
-    hq: 4,
-    standard: 12,
-  },
   {
     id: 'standard',
     label: 'Standard pack',
     tagline: 'No commitment',
     price: '£14.99',
     cadence: 'one-time',
-    credits: 150,
+    credits: 100,
     creditsCadence: 'credits · no expiry',
-    premium: 5,
-    hq: 10,
-    standard: 30,
+    renders: 10,
   },
 ]
 
@@ -91,7 +75,7 @@ export function PricingCards({
   onChoosePlan,
 }: PricingCardsProps) {
   return (
-    <div className="settings-upgrade-grid settings-upgrade-grid--four">
+    <div className="settings-upgrade-grid">
       {TOPUP_PACKS.map(pack => (
         <article key={pack.id} className="settings-upgrade-card" data-accent="slate">
           <span className="settings-upgrade-kind t-mono-label">One-time</span>
@@ -109,20 +93,8 @@ export function PricingCards({
           </div>
           <ul className="settings-upgrade-bullets">
             <li>
-              <span className="settings-upgrade-num">{pack.premium}</span>
-              <span>Premium renders</span>
-            </li>
-            <li>
-              <span className="settings-upgrade-num">{pack.hq}</span>
-              <span>High Quality renders</span>
-            </li>
-            <li>
-              <span className="settings-upgrade-num">{pack.standard}</span>
-              <span>Standard renders</span>
-            </li>
-            <li className="settings-upgrade-perk">
-              <span className="settings-upgrade-perk-mark" aria-hidden>—</span>
-              <span>Permanently removes watermarks</span>
+              <span className="settings-upgrade-num">{pack.renders}</span>
+              <span>Cinematic renders</span>
             </li>
           </ul>
           <button
@@ -152,16 +124,8 @@ export function PricingCards({
           </div>
           <ul className="settings-upgrade-bullets">
             <li>
-              <span className="settings-upgrade-num">{plan.bullets.premium}</span>
-              <span>Premium renders</span>
-            </li>
-            <li>
-              <span className="settings-upgrade-num">{plan.bullets.hq}</span>
-              <span>High Quality renders</span>
-            </li>
-            <li>
-              <span className="settings-upgrade-num">{plan.bullets.standard}</span>
-              <span>Standard renders</span>
+              <span className="settings-upgrade-num">{plan.renders}</span>
+              <span>Cinematic renders / month</span>
             </li>
           </ul>
           <button
@@ -191,7 +155,7 @@ export function PricingModal({
   subtitle = 'Remove watermarks and export clean MP4s. Pick a one-time pack or a monthly plan.',
 }: PricingModalProps) {
   return (
-    <Modal open={open} onClose={onClose} title={title} size="lg">
+    <Modal open={open} onClose={onClose} title={title} size="xl">
       <p className="ex-modal-subtitle">{subtitle}</p>
       <PricingCards />
     </Modal>

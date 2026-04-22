@@ -1,9 +1,7 @@
 // frontend/src/components/ProceedToStyleButton.tsx
-import { MODEL_TIER_CREDITS } from '../api/client'
-import type { ModelTier } from '../api/client'
+import { CREDITS_PER_RENDER } from '../api/client'
 
 interface Props {
-  modelTier: ModelTier
   creditsRemaining: number
   onProceed: () => void
 }
@@ -20,12 +18,10 @@ function IconSparkle() {
 }
 
 export function ProceedToStyleButton({
-  modelTier,
   creditsRemaining,
   onProceed,
 }: Props) {
-  const cost = MODEL_TIER_CREDITS[modelTier]
-  const insufficient = creditsRemaining < cost
+  const insufficient = creditsRemaining < CREDITS_PER_RENDER
 
   return (
     <button
@@ -41,7 +37,7 @@ export function ProceedToStyleButton({
         <IconSparkle />
         <span className="apply-style-btn-label">Apply Styling</span>
       </span>
-      <span className="apply-style-btn-cost">{cost} credits</span>
+      <span className="apply-style-btn-cost">{CREDITS_PER_RENDER} credits</span>
     </button>
   )
 }

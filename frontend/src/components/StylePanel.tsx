@@ -20,6 +20,9 @@ export function CreditIcon({ size = 12 }: { size?: number }) {
 
 const MAX_SHARED_CHARS = 800
 const MAX_ROWS = 20
+// Past this many rows the component list becomes a scroll region — keeps the
+// studio control panel from ballooning on parts-heavy CAD files.
+const SCROLL_THRESHOLD = 6
 
 const MATERIAL_PRESETS = [
   'brushed aluminium',
@@ -105,7 +108,7 @@ export function StylePanel({
       <div className="prompt-section">
         <span className="prompt-section-label">Components &amp; Materials</span>
 
-        <div className="cmt">
+        <div className={['cmt', options.rows.length > SCROLL_THRESHOLD ? 'cmt--scrollable' : ''].filter(Boolean).join(' ')}>
           {/* Header */}
           <div className="cmt-head">
             <span className="cmt-head-part">Part</span>
@@ -114,7 +117,7 @@ export function StylePanel({
           </div>
 
           {/* Rows */}
-          <div className="cmt-body">
+          <div className={['cmt-body', options.rows.length > SCROLL_THRESHOLD ? 'cmt-body--scrollable' : ''].filter(Boolean).join(' ')}>
             {options.rows.map((row, idx) => (
               <div key={idx} className="cmt-row-wrap">
                 <div className="cmt-row">
@@ -126,6 +129,12 @@ export function StylePanel({
                     onChange={e => updateRow(idx, 'part', e.target.value)}
                     disabled={disabled}
                     spellCheck={false}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    name={`ex-part-${idx}`}
+                    data-lpignore="true"
+                    data-form-type="other"
                   />
                   <div className="cmt-material-cell">
                     <input
@@ -138,6 +147,12 @@ export function StylePanel({
                       onChange={e => updateRow(idx, 'material', e.target.value)}
                       disabled={disabled}
                       spellCheck={false}
+                      autoComplete="off"
+                      autoCorrect="off"
+                      autoCapitalize="off"
+                      name={`ex-material-${idx}`}
+                      data-lpignore="true"
+                      data-form-type="other"
                     />
                     {focusedRow === idx && (
                       <div

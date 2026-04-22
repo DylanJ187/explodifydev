@@ -450,6 +450,7 @@ textarea { font-family: inherit; }
   transition: border-color 0.2s ease, background 0.2s ease;
   min-height: 130px;
   text-align: center;
+  background: var(--panel-r);
 }
 
 .upload-zone:hover {
@@ -881,6 +882,47 @@ textarea { font-family: inherit; }
   overflow: visible;
 }
 
+.cmt-body--scrollable {
+  max-height: 186px; /* 6 rows × 31px */
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.cmt-body--scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+
+.cmt-body--scrollable::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.cmt-body--scrollable::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+
+.cmt-body--scrollable::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Scroll indicator: fade above the footer when the row list can scroll */
+.cmt--scrollable .cmt-footer {
+  position: relative;
+}
+
+.cmt--scrollable .cmt-footer::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 18px;
+  background: linear-gradient(to bottom, rgba(15, 15, 15, 0), rgba(15, 15, 15, 0.95));
+  pointer-events: none;
+}
+
 .cmt-row-wrap {
   position: relative;
   border-bottom: 1px solid var(--border);
@@ -1256,6 +1298,50 @@ input[type='range']::-moz-range-thumb {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* Full-width intro (drag-drop and geometry-reading states). Centers the
+ * upload zone / reading-geometry screen across the whole viewport, used
+ * before the orientation picker unlocks the left control panel. The grid
+ * mesh background is the same one the old IdleOutput used — it anchors the
+ * empty canvas so the drop zone doesn't float in a void. */
+.right-panel--intro {
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.right-panel--intro::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 44px 44px;
+  opacity: 0.6;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.studio-intro {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Loading variant drops the cap — the explode-cube animation wants room. */
+.studio-intro--loading {
+  max-width: none;
+}
+.studio-intro--loading .loading-output {
+  min-height: 0;
 }
 
 /* ─── Idle output ─── */
@@ -4951,77 +5037,6 @@ input[type='range']::-moz-range-thumb {
   margin-top: 6px;
 }
 
-/* ─── MODEL TIERS TABLE ─── */
-.model-table {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  overflow: hidden;
-  background: linear-gradient(180deg, #0f0f0f 0%, #0a0a0a 100%);
-}
-.model-row {
-  display: grid;
-  grid-template-columns: 1.1fr 1.2fr 0.8fr 2fr;
-  gap: 16px;
-  align-items: center;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--border);
-}
-.model-row:last-child { border-bottom: none; }
-.model-row--head {
-  background: rgba(255,255,255,0.015);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  color: var(--text-2);
-  padding: 12px 24px;
-}
-.model-cell-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  font-family: var(--font-display);
-  font-size: 20px;
-  letter-spacing: 0.04em;
-  color: var(--text-1);
-}
-.model-pip {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--text-3);
-}
-.model-pip--standard      { background: #7a8793; box-shadow: 0 0 6px rgba(122,135,147,0.55); }
-.model-pip--high-quality  { background: #c6a34f; box-shadow: 0 0 6px rgba(198,163,79,0.55); }
-.model-pip--premium       { background: var(--accent); box-shadow: 0 0 10px rgba(212,168,67,0.8); }
-
-.model-cell-sub {
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  color: var(--text-2);
-}
-.model-cell-num {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  font-family: var(--font-display);
-}
-.model-cell-num-main {
-  font-size: 22px;
-  color: var(--accent);
-  letter-spacing: 0.03em;
-}
-.model-cell-num-unit {
-  font-family: var(--font-mono);
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--text-3);
-}
-.model-cell-note {
-  font-size: 12px;
-  color: var(--text-1);
-}
-
 /* ─── FOOTER META ─── */
 .profile-footmeta {
   display: flex;
@@ -5042,8 +5057,6 @@ input[type='range']::-moz-range-thumb {
 @media (max-width: 960px) {
   .profile-ribbon { grid-template-columns: 1fr; }
   .plan-grid { grid-template-columns: 1fr; }
-  .model-row { grid-template-columns: 1fr 1fr; }
-  .model-row--head { display: none; }
   .profile-hero-body { grid-template-columns: auto 1fr; }
   .profile-hero-action { grid-column: 1 / -1; justify-self: start; }
 }
@@ -7436,6 +7449,7 @@ Polls the server for completion and swaps to a real ProjectCard when done. */
 .ex-modal-panel--sm { max-width: 420px; }
 .ex-modal-panel--md { max-width: 560px; }
 .ex-modal-panel--lg { max-width: 780px; }
+.ex-modal-panel--xl { max-width: 1240px; }
 
 .ex-modal-header {
   display: flex;
@@ -8364,9 +8378,6 @@ Polls the server for completion and swaps to a real ProjectCard when done. */
   gap: 14px;
   margin-top: 16px;
 }
-.settings-upgrade-grid--four {
-  grid-template-columns: repeat(4, 1fr);
-}
 .settings-upgrade-card {
   --card-accent: 180, 180, 185;
   position: relative;
@@ -8386,13 +8397,16 @@ Polls the server for completion and swaps to a real ProjectCard when done. */
 .settings-upgrade-card[data-accent="teal"]  { --card-accent: 96, 196, 184; }
 .settings-upgrade-card[data-accent="slate"] { --card-accent: 160, 170, 178; }
 
+.settings-upgrade-card {
+  border-color: rgb(var(--card-accent) / 0.25);
+}
 .settings-upgrade-card::before {
   content: '';
   position: absolute;
   top: 0; left: 22px; right: 22px;
-  height: 2px;
-  background: rgb(var(--card-accent) / 0.55);
-  opacity: 0.65;
+  height: 3px;
+  background: rgb(var(--card-accent) / 0.9);
+  opacity: 1;
   transition: opacity 150ms var(--ease-out);
 }
 .settings-upgrade-card::after {
@@ -8546,9 +8560,6 @@ Polls the server for completion and swaps to a real ProjectCard when done. */
   color: rgb(var(--card-accent) / 1);
 }
 
-@media (max-width: 1200px) {
-  .settings-upgrade-grid--four { grid-template-columns: repeat(2, 1fr); }
-}
 @media (max-width: 980px) {
   .settings-upgrade-grid { grid-template-columns: repeat(2, 1fr); }
 }
@@ -8625,180 +8636,6 @@ Polls the server for completion and swaps to a real ProjectCard when done. */
 }
 .apply-style-btn-cost::before { content: '['; margin-right: 4px; }
 .apply-style-btn-cost::after  { content: ']'; margin-left: 4px; }
-
-/* ── Left-panel model selector tile ────────────────────────────────────── */
-.model-selector {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  padding: 12px 14px;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  color: var(--text-1);
-  cursor: pointer;
-  text-align: left;
-  font: inherit;
-  transition: background 120ms ease, border-color 120ms ease;
-}
-.model-selector:hover:not(:disabled),
-.model-selector--open {
-  background: rgba(255,255,255,0.04);
-  border-color: var(--accent);
-}
-.model-selector--open .model-selector-chev {
-  color: var(--accent);
-}
-.model-selector-chev {
-  transition: color 140ms ease;
-}
-.model-selector--disabled { opacity: 0.5; cursor: not-allowed; }
-.model-selector-main {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  flex: 1;
-}
-.model-selector-head {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.model-selector-tier {
-  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
-  font-size: 10px;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  color: var(--accent);
-}
-.model-selector-model {
-  font-size: 12px;
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.model-selector-cost {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
-  font-size: 10px;
-  letter-spacing: 0.14em;
-  color: var(--text-3, rgba(255,255,255,0.55));
-  font-variant-numeric: tabular-nums;
-}
-.model-selector-chev {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3, rgba(255,255,255,0.5));
-  flex-shrink: 0;
-}
-
-/* ── Model selection popover (vertical pill stack) ──────────────────────── */
-.model-popover {
-  position: fixed;
-  z-index: 600;
-  transform: translateY(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 5px;
-  min-width: 240px;
-  background: var(--panel-l);
-  border: 1px solid var(--border);
-  border-radius: 2px;
-  box-shadow: var(--shadow-menu);
-  animation: model-popover-in 120ms var(--ease-out);
-  white-space: nowrap;
-}
-.model-popover-arrow {
-  position: absolute;
-  top: 50%;
-  left: -5px;
-  width: 8px;
-  height: 8px;
-  background: var(--panel-l);
-  border-left: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
-  transform: translateY(-50%) rotate(45deg);
-  pointer-events: none;
-}
-@keyframes model-popover-in {
-  from { opacity: 0; transform: translate(-4px, -50%); }
-  to   { opacity: 1; transform: translate(0, -50%); }
-}
-
-.model-pill {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  padding: 8px 10px 8px 11px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  color: var(--text-2);
-  font: inherit;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
-}
-.model-pill:hover:not(:disabled) {
-  background: rgba(255,255,255,0.04);
-  border-color: rgba(255,255,255,0.14);
-  color: var(--text-1);
-}
-.model-pill--active {
-  background: rgba(212,168,67,0.10);
-  border-color: var(--accent);
-  color: var(--text-1);
-}
-.model-pill--disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.model-pill-text {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  line-height: 1;
-}
-.model-pill-tier {
-  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
-  font-size: 9px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--text-3, rgba(255,255,255,0.5));
-}
-.model-pill--active .model-pill-tier { color: var(--accent); }
-.model-pill-name {
-  font-size: 12px;
-  color: inherit;
-}
-.model-pill-cost {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding-left: 10px;
-  border-left: 1px dashed var(--border);
-  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
-  font-size: 10.5px;
-  letter-spacing: 0.1em;
-  color: var(--accent);
-  font-variant-numeric: tabular-nums;
-}
-.model-pill--disabled .model-pill-cost {
-  color: var(--text-3, rgba(255,255,255,0.4));
-  border-left-color: var(--border);
-}
 
 /* ── Confirm-credits modal extras ───────────────────────────────────────── */
 .credits-confirm-summary {

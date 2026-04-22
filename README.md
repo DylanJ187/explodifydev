@@ -16,7 +16,7 @@ Explodify is a CAD-to-cinematic-video pipeline. Upload a CAD file (`.step`, `.ig
 | 3D preview | Vanilla Three.js (`createViewer.ts`) — NOT @react-three/fiber |
 | 3D rendering | pyrender + trimesh |
 | Video assembly | ffmpeg |
-| AI styling | FAL.ai Kling v2.1 (video-to-video) |
+| AI styling | FAL.ai video-to-video (Kling o1 + LTX-2.3) |
 | Job store | In-memory (`backend/jobs.py`) |
 | Gallery store | SQLite (per-user) |
 
@@ -40,7 +40,7 @@ Explodify/
 │   ├── phase1_geometry.py     Load + segment CAD, reorient(), axis_directions()
 │   ├── phase2_snapshots.py    pyrender frames per axis with orbit camera
 │   ├── phase3_assemble.py     ffmpeg encode frames → MP4
-│   ├── phase4_video.py        Optional Kling v2v styling
+│   ├── phase4_video.py        Optional FAL v2v styling (Kling o1 / LTX-2.3)
 │   ├── orientation_preview.py 6-face preview images for upload step
 │   ├── prompt_interpreter.py  Style prompt → shading params
 │   └── format_loader.py       Multi-format CAD loader
@@ -64,7 +64,7 @@ Explodify/
 1. **Phase 1 — Geometry Analysis** (`phase1_geometry.py`): Parse mesh, apply `reorient()` (aligns longest bounding-box axis to world Y), compute component bounding boxes, derive explosion vectors. Returns `axis_directions()`.
 2. **Phase 2 — Snapshot Rendering** (`phase2_snapshots.py`): pyrender renders 72 PNG frames per variant with turntable orbit camera around world Y.
 3. **Phase 3 — ffmpeg Assembly** (`phase3_assemble.py`): Stitch frames into an MP4 (explode + reverse loop).
-4. **Phase 4 — FAL Styling** (`phase4_video.py`): Submit the rendered MP4 to FAL.ai Kling. Gated by user approval and the `_FAL_ENABLED` flag in `main.py`.
+4. **Phase 4 — FAL Styling** (`phase4_video.py`): Submit the rendered MP4 to FAL.ai. Premium tier routes to Kling o1 v2v edit; Standard tier routes to LTX-2.3 distilled reference-v2v. Gated by user approval and the `_FAL_ENABLED` flag in `main.py`.
 
 ---
 
@@ -87,7 +87,7 @@ Upload CAD ─▶ Orientation ─▶ Style panel ─▶ Generate
                                               │
                                               ▼ (opt-in)
                                     ┌──── Phase 4 ────┐
-                                    │ Kling v2v style  │  ← styled video
+                                    │   FAL v2v style  │  ← styled video
                                     └──────────────────┘
                                               │
                                               ▼
@@ -108,8 +108,8 @@ Each phase reports progress through `/jobs/{id}`; the `JobQueueIndicator` HUD an
 - **Orbit-specific easing**: Independent 5-sample position curve for orbit. Same semantics as explosion.
 - **Live preview frame**: `PreviewFrame` component renders a single pyrender frame at t=0 from the current camera direction (debounced 280 ms).
 - **Free-tier watermark**: `canDownload=false` users see an `EXPLODIFY` overlay and a "Upgrade to download" button that opens the shared `PricingModal`.
-- **Model tier selector** on the review gate: Standard (Kling 3.0), High Quality (Kling 2.5 Pro), Premium (Kling o1). Horizontal popover anchored right of the trigger.
-- **FAL kill switch**: set `_FAL_ENABLED = False` near the top of `backend/main.py` to skip Kling and return only base renders.
+- **Model tier selector** on the review gate: Standard (LTX-2.3 Distilled) and Premium (Kling o1). Horizontal popover anchored right of the trigger.
+- **FAL kill switch**: set `_FAL_ENABLED = False` near the top of `backend/main.py` to skip the v2v pass and return only base renders.
 
 ---
 
@@ -128,7 +128,7 @@ Single-viewport layout. Identity row → Usage card (credits, progress bar, rend
 Portal modal above TopNav (z-index 900). ESC / backdrop dismiss. Four cards: Starter + Standard (one-time) and Pro + Studio (monthly). Starter and Standard expose a "Permanently removes watermarks" bullet; Pro and Studio imply it. Invoked from Profile, the Studio video player's upgrade button, and the Gallery preview upgrade button.
 
 ### Model selector (`ModelSelector.tsx` + `ModelSelectionPopover.tsx`)
-Compact horizontal popover, portal-rendered with `position: fixed`, anchored to the right of the trigger via `getBoundingClientRect()`. Three pills: Standard (Kling 3.0) / High Quality (Kling 2.5 Pro) / Premium (Kling o1). No icons except the credit glyph.
+Compact horizontal popover, portal-rendered with `position: fixed`, anchored to the right of the trigger via `getBoundingClientRect()`. Two pills: Standard (LTX-2.3 Distilled) / Premium (Kling o1). No icons except the credit glyph.
 
 ---
 
@@ -136,15 +136,15 @@ Compact horizontal popover, portal-rendered with `position: fixed`, anchored to 
 
 Canonical pricing lives in `explodify/pricing-model.md` (Obsidian vault). Prices are set explicitly per currency in Stripe — no runtime FX. Customer currency is detected from `CF-IPCountry` and overridable via a footer picker.
 
-| Plan | USD | EUR | GBP | CAD | AUD | JPY | Credits | Premium / HQ / Std |
+| Plan | USD | EUR | GBP | CAD | AUD | JPY | Credits | Premium / Std |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Free | — | — | — | — | — | — | 30 (watermarked) | 1 / 2 / 6 |
-| Starter (one-time) | $9.99 | €9.99 | £6.99 | C$12.99 | A$14.99 | ¥1,490 | 60 | 2 / 4 / 12 |
-| Standard (one-time) | $19.99 | €19.99 | £14.99 | C$24.99 | A$29.99 | ¥2,990 | 150 | 5 / 10 / 30 |
-| Pro (/mo) | $29.99 | €29.99 | £29.99 | C$39.99 | A$44.99 | ¥4,490 | 450 | 15 / 30 / 90 |
-| Studio (/mo) | $49.99 | €49.99 | £49.99 | C$64.99 | A$74.99 | ¥7,490 | 900 | 30 / 60 / 180 |
+| Free | — | — | — | — | — | — | 30 (watermarked) | 1 / 6 |
+| Starter (one-time) | $9.99 | €9.99 | £6.99 | C$12.99 | A$14.99 | ¥1,490 | 60 | 2 / 12 |
+| Standard (one-time) | $19.99 | €19.99 | £14.99 | C$24.99 | A$29.99 | ¥2,990 | 150 | 5 / 30 |
+| Pro (/mo) | $29.99 | €29.99 | £29.99 | C$39.99 | A$44.99 | ¥4,490 | 450 | 15 / 90 |
+| Studio (/mo) | $49.99 | €49.99 | £49.99 | C$64.99 | A$74.99 | ¥7,490 | 900 | 30 / 180 |
 
-Cost model: 1 Premium = 30 credits = 2 HQ = 6 Standard. Any paid SKU permanently removes the watermark on first purchase (durable across subscription cancellation).
+Cost model: 1 Premium = 30 credits = 6 Standard. Any paid SKU permanently removes the watermark on first purchase (durable across subscription cancellation).
 
 ---
 
@@ -152,9 +152,8 @@ Cost model: 1 Premium = 30 credits = 2 HQ = 6 Standard. Any paid SKU permanently
 
 **Backend:**
 ```bash
-cd backend
 python -m venv .venv && source .venv/bin/activate
-pip install fastapi uvicorn python-dotenv pyrender trimesh numpy pydantic pillow python-multipart fal-client
+pip install -e ".[dev]"              # installs from pyproject.toml
 uvicorn backend.main:app --reload --port 8000
 ```
 
@@ -165,19 +164,23 @@ npm install
 npm run dev          # → http://localhost:5173
 ```
 
-**Root `.env`:**
+**Root `.env` (gitignored — required):**
 ```
 FAL_KEY=<your fal.ai key>
-SUPABASE_URL=...
-SUPABASE_ANON_KEY=...
+SUPABASE_URL=https://<project-ref>.supabase.co
+# SUPABASE_JWT_AUD=authenticated   # optional; defaults to "authenticated"
+# SUPABASE_JWT_ALGS=RS256,ES256    # optional; HS256 is hard-rejected at import
 ```
 
-**`frontend/.env.local`:**
+The backend fails fast on import if `SUPABASE_URL` is missing or not https. See `.env.example` for the full list.
+
+**`frontend/.env.local` (gitignored — required):**
 ```
-VITE_API_BASE=http://localhost:8000
-VITE_SUPABASE_URL=...
-VITE_SUPABASE_ANON_KEY=...
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=<legacy JWT anon key, safe to embed>
 ```
+
+The frontend throws on startup if either value is missing or still a placeholder.
 
 To disable FAL styling (keep base render only): set `_FAL_ENABLED = False` near the top of `backend/main.py` and restart.
 
@@ -220,6 +223,8 @@ To disable FAL styling (keep base render only): set `_FAL_ENABLED = False` near 
 | `POST` | `/account` | Update profile prefs |
 | `POST` | `/account/signout-all` | Invalidate all sessions |
 
+Every route above except `GET /health` is guarded by `Depends(current_user)`. Requests without a valid Supabase `Authorization: Bearer <jwt>` header return `401`. See [Authentication](#authentication) for the verification path.
+
 ### `POST /jobs` — key form fields
 
 - `selected_variant` — `"x"`, `"y"`, `"z"`, or comma-separated subset
@@ -248,7 +253,7 @@ Backend `cam_dir` in `phase2_snapshots.py` uses the same convention. Both operat
 | `pipeline/phase1_geometry.py` | Geometry analysis, `reorient()`, `axis_directions()` |
 | `pipeline/phase2_snapshots.py` | pyrender frame generation, orbit around world Y |
 | `pipeline/phase3_assemble.py` | ffmpeg video assembly |
-| `pipeline/phase4_video.py` | FAL.ai Kling v2v styling |
+| `pipeline/phase4_video.py` | FAL.ai v2v styling (Kling o1 + LTX-2.3) |
 | `frontend/src/App.tsx` | React state machine |
 | `frontend/src/api/client.ts` | Typed API client |
 | `frontend/src/components/TopNav.tsx` | 3-tab nav with sliding indicator + credit chip |
@@ -256,7 +261,7 @@ Backend `cam_dir` in `phase2_snapshots.py` uses the same convention. Both operat
 | `frontend/src/components/Profile.tsx` | Usage card + PricingModal trigger |
 | `frontend/src/components/shell/PricingModal.tsx` | Shared 4-card pricing modal |
 | `frontend/src/components/CustomVideoPlayer.tsx` | Player chrome, watermark, upgrade CTA |
-| `frontend/src/components/ModelSelector.tsx` | Tier button (Kling 3.0 / 2.5 Pro / o1) |
+| `frontend/src/components/ModelSelector.tsx` | Tier button (LTX-2.3 / Kling o1) |
 | `frontend/src/components/ModelSelectionPopover.tsx` | Portal-anchored popover beside the tier button |
 | `frontend/src/components/orientation/createViewer.ts` | Vanilla Three.js engine |
 
@@ -288,13 +293,38 @@ Backend `cam_dir` in `phase2_snapshots.py` uses the same convention. Both operat
 
 ---
 
+## Authentication
+
+- **Identity provider:** Supabase. ES256 / RS256 asymmetric JWTs, verified against the project JWKS at `/auth/v1/.well-known/jwks.json`.
+- **Backend:** `backend/auth.py` exposes `current_user` as a FastAPI dependency. Every non-`/health` route lives on `APIRouter(dependencies=[Depends(current_user)])` — there is exactly one audit boundary and no way to forget the guard.
+- **JWKS caching:** single-entry `lru_cache` on `jwks()`. On an unknown `kid` we clear the cache once and refetch, so Supabase key rotations don't require a backend restart.
+- **HS256 is rejected at import time.** Operators cannot weaken signature verification via `SUPABASE_JWT_ALGS`.
+- **`SUPABASE_URL` is required and must be HTTPS** — the module raises on import if either check fails.
+- **Frontend:** `src/api/authFetch.ts` attaches the Supabase access token and runs a single-flight refresh on `401`. A rejected refresh signs the user out and redirects to `/login`. All API calls in `client.ts` and `MeshViewer.tsx` go through this wrapper.
+
+See `docs/adr/001-auth-jwks.md` for the decision rationale.
+
+---
+
 ## Testing
 
 ```bash
-pytest tests/ -v
+# Backend
+pip install -e ".[dev]"
+pytest -q                             # unit + auth + api tests
 ```
 
-Coverage focus: pipeline phase correctness, gallery store invariants, orientation math.
+```bash
+# Frontend
+cd frontend
+npm install
+npm run test                          # vitest run
+npm run test:watch                    # vitest watch
+```
+
+CI runs both suites on every push / PR via `.github/workflows/ci.yml`.
+
+Coverage focus: pipeline phase correctness, gallery store invariants, orientation math, JWKS verification edge cases, and the `authFetch` single-flight refresh path.
 
 ---
 

@@ -5,6 +5,7 @@ import {
   type GalleryItem, type GalleryTier,
 } from '../../api/client'
 import { Modal } from './Modal'
+import { AuthedImg } from '../AuthedImg'
 
 interface Props {
   open: boolean
@@ -72,7 +73,7 @@ export function CapacityModal({
                 >
                   <div className="cap-modal-tile-thumb">
                     {it.thumbnail_path
-                      ? <img src={galleryThumbnailUrl(it.id)} alt="" loading="lazy" />
+                      ? <AuthedImg src={galleryThumbnailUrl(it.id)} loading="lazy" />
                       : <div className="cap-modal-tile-empty" />}
                     <span className="cap-modal-tile-kind">{kindBadge(it.kind)}</span>
                   </div>

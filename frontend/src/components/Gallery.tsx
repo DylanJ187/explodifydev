@@ -6,8 +6,11 @@ import {
   stitchGalleryItems, galleryVideoUrl, galleryThumbnailUrl,
   toggleFavorite, createGalleryLoop, listPendingRenders,
 } from '../api/client'
+import { authFetch } from '../api/authFetch'
 import type { GalleryItem, GalleryKind, PendingRender } from '../api/client'
 import { CustomVideoPlayer } from './CustomVideoPlayer'
+import { AuthedImg } from './AuthedImg'
+import { useAuthedBlobUrl } from '../api/useAuthedBlobUrl'
 import { ConfirmModal, PromptModal } from './shell/Modal'
 import { PricingModal } from './shell/PricingModal'
 
@@ -570,7 +573,25 @@ function ProjectCard({
   const showStyle = canStyleInStudio(item)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [hovering, setHovering] = useState(false)
+  // Hover-preview video fetch is gated on hover — we don't want to pull 11
+  // full clips upfront just to populate the grid. The trade-off is a small
+  // first-hover delay while the blob downloads.
+  const hoverVideoSrc = useAuthedBlobUrl(hovering ? galleryVideoUrl(item.id) : null)
   const favorite = isFavorite(item)
+
+  async function onDownload() {
+    const resp = await authFetch(galleryVideoUrl(item.id))
+    if (!resp.ok) return
+    const blob = await resp.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${item.title.replace(/\s+/g, '_')}.mp4`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
   const cls = `project-card project-card--${mode}
     ${selected ? 'project-card--selected' : ''}
     ${hovering ? 'project-card--hovering' : ''}`
@@ -604,12 +625,12 @@ function ProjectCard({
         aria-label={`Preview ${item.title}`}
       >
         {item.thumbnail_path
-          ? <img src={galleryThumbnailUrl(item.id)} alt="" loading="lazy" />
+          ? <AuthedImg src={galleryThumbnailUrl(item.id)} loading="lazy" />
           : <div className="project-card-thumb-empty" />}
         <video
           ref={videoRef}
           className="project-card-hover-video"
-          src={galleryVideoUrl(item.id)}
+          src={hoverVideoSrc ?? undefined}
           muted
           loop
           playsInline
@@ -678,16 +699,15 @@ function ProjectCard({
               <IconLoop />
             </button>
           )}
-          <a
+          <button
+            type="button"
             className="project-card-icon-btn"
-            href={galleryVideoUrl(item.id)}
-            download={`${item.title.replace(/\s+/g, '_')}.mp4`}
             aria-label="Download"
             data-tip="Download MP4"
-            onClick={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); onDownload() }}
           >
             <IconDownload />
-          </a>
+          </button>
           <button
             type="button"
             className="project-card-icon-btn"
@@ -738,7 +758,7 @@ function PendingCard({
     <div className={`project-card project-card--${mode} project-card--pending`}>
       <div className="project-card-thumb project-card-thumb--pending">
         {render.thumbnail_path && render.source_id
-          ? <img src={galleryThumbnailUrl(render.source_id)} alt="" loading="lazy" />
+          ? <AuthedImg src={galleryThumbnailUrl(render.source_id)} loading="lazy" />
           : <div className="project-card-thumb-empty" />}
         <div className="pending-shimmer" aria-hidden />
         <div className="pending-overlay">

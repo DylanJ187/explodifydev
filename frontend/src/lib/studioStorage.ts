@@ -2,18 +2,43 @@
 // Local persistence for the Studio page. Survives page refreshes, tab
 // navigation, and soft errors so users don't lose their work on every mishap.
 //
+// Keys are scoped per user so a snapshot captured under one identity never
+// rehydrates into another — previously an anonymous DEV_BYPASS snapshot could
+// leak into a real signed-in session and resurrect stale jobId / previewId
+// pointing at a different tenant's data.
+//
 // Bumping VERSION invalidates older snapshots cleanly — drop the key and fall
 // through to defaults rather than partially hydrating a stale shape.
 import type {
-  ModelTier,
   PreviewResult,
   VariantName,
 } from '../api/client'
 import type { OrbitMode, OrbitDirection, Vec3 } from '../components/orientation/createViewer'
 import type { StyleOptions, RestyleEntry } from '../App'
 
-const STORAGE_KEY = 'explodify.studio.v1'
-const VERSION = 1
+const STORAGE_PREFIX = 'explodify.studio.v3.'
+const LEGACY_PREFIXES = ['explodify.studio.v2.']
+const LEGACY_EXACT_KEYS = ['explodify.studio.v1']
+const VERSION = 3
+
+function storageKey(userId: string): string {
+  return `${STORAGE_PREFIX}${userId}`
+}
+
+function purgeLegacyKeys(ls: Storage): void {
+  for (const legacy of LEGACY_EXACT_KEYS) {
+    try { ls.removeItem(legacy) } catch { /* ignore */ }
+  }
+  const stale: string[] = []
+  try {
+    for (let i = 0; i < ls.length; i++) {
+      const key = ls.key(i)
+      if (!key) continue
+      if (LEGACY_PREFIXES.some(p => key.startsWith(p))) stale.push(key)
+    }
+    for (const key of stale) ls.removeItem(key)
+  } catch { /* ignore */ }
+}
 
 export type PersistedAppState =
   | 'idle'
@@ -51,7 +76,6 @@ export interface StudioSnapshot {
   orbitMode: OrbitMode
   orbitDirection: OrbitDirection
   orbitEasingCurve: number[]
-  modelTier: ModelTier
   backdropColor: string
   cameraDirection: Vec3
   renderedSettings: RenderedSettings | null
@@ -84,43 +108,49 @@ function safeLocalStorage(): Storage | null {
   }
 }
 
-export function loadStudio(): StudioSnapshot | null {
+export function loadStudio(userId: string | null): StudioSnapshot | null {
   const ls = safeLocalStorage()
   if (!ls) return null
-  const raw = ls.getItem(STORAGE_KEY)
+  purgeLegacyKeys(ls)
+  if (!userId) return null
+  const key = storageKey(userId)
+  const raw = ls.getItem(key)
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as Partial<StudioSnapshot> & { version?: number }
     if (parsed.version !== VERSION) {
-      ls.removeItem(STORAGE_KEY)
+      ls.removeItem(key)
       return null
     }
     // Minimal shape guard — if the top-level state is missing or unknown, drop.
     if (typeof parsed.state !== 'string' || !isPersistableState(parsed.state)) {
-      ls.removeItem(STORAGE_KEY)
+      ls.removeItem(key)
       return null
     }
     return parsed as StudioSnapshot
   } catch {
-    ls.removeItem(STORAGE_KEY)
+    ls.removeItem(key)
     return null
   }
 }
 
-export function saveStudio(snapshot: Omit<StudioSnapshot, 'version'>): void {
+export function saveStudio(
+  userId: string | null,
+  snapshot: Omit<StudioSnapshot, 'version'>,
+): void {
   const ls = safeLocalStorage()
-  if (!ls) return
+  if (!ls || !userId) return
   if (!isPersistableState(snapshot.state)) return
   try {
-    ls.setItem(STORAGE_KEY, JSON.stringify({ version: VERSION, ...snapshot }))
+    ls.setItem(storageKey(userId), JSON.stringify({ version: VERSION, ...snapshot }))
   } catch {
     // Quota exceeded or serialization loop — fail quiet; users get a fresh
     // session next refresh rather than a broken one.
   }
 }
 
-export function clearStudio(): void {
+export function clearStudio(userId: string | null): void {
   const ls = safeLocalStorage()
-  if (!ls) return
-  try { ls.removeItem(STORAGE_KEY) } catch { /* ignore */ }
+  if (!ls || !userId) return
+  try { ls.removeItem(storageKey(userId)) } catch { /* ignore */ }
 }

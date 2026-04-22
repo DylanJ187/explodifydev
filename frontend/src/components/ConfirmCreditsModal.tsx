@@ -1,7 +1,6 @@
 // frontend/src/components/ConfirmCreditsModal.tsx
 import { useEffect, useRef, useState } from 'react'
-import { MODEL_TIER_CREDITS, MODEL_TIER_LABELS } from '../api/client'
-import type { ModelTier } from '../api/client'
+import { CREDITS_PER_RENDER } from '../api/client'
 import { CreditIcon } from './StylePanel'
 
 export const SKIP_CREDITS_CONFIRM_KEY = 'explodify.skipCreditsConfirm'
@@ -25,7 +24,6 @@ export function setSkipConfirm(skip: boolean): void {
 
 interface Props {
   open: boolean
-  modelTier: ModelTier
   creditsRemaining: number
   onConfirm: (dontAskAgain: boolean) => void
   onCancel: () => void
@@ -33,7 +31,6 @@ interface Props {
 
 export function ConfirmCreditsModal({
   open,
-  modelTier,
   creditsRemaining,
   onConfirm,
   onCancel,
@@ -57,9 +54,8 @@ export function ConfirmCreditsModal({
 
   if (!open) return null
 
-  const cost = MODEL_TIER_CREDITS[modelTier]
-  const insufficient = creditsRemaining < cost
-  const balanceAfter = Math.max(0, creditsRemaining - cost)
+  const insufficient = creditsRemaining < CREDITS_PER_RENDER
+  const balanceAfter = Math.max(0, creditsRemaining - CREDITS_PER_RENDER)
 
   return (
     <div
@@ -84,8 +80,7 @@ export function ConfirmCreditsModal({
 
         <div className="ex-modal-body">
           <p className="ex-modal-message">
-            You're about to spend credits on a{' '}
-            <strong>{MODEL_TIER_LABELS[modelTier]}</strong> render.
+            You're about to spend credits on a cinematic render.
           </p>
 
           <div className="credits-confirm-summary">
@@ -93,7 +88,7 @@ export function ConfirmCreditsModal({
               <span className="credits-confirm-key">Cost</span>
               <span className="credits-confirm-val credits-confirm-val--cost">
                 <CreditIcon size={14} />
-                <span>{cost} credits</span>
+                <span>{CREDITS_PER_RENDER} credits</span>
               </span>
             </div>
             <div className="credits-confirm-row">
@@ -133,7 +128,7 @@ export function ConfirmCreditsModal({
               disabled={insufficient}
               onClick={() => onConfirm(dontAskAgain)}
             >
-              Spend {cost} credits
+              Spend {CREDITS_PER_RENDER} credits
             </button>
           </div>
         </div>
